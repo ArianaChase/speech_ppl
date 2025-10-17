@@ -2,15 +2,28 @@
 # GSLM
 ## Setup Environment
 ```bash
-git clone git@github.com:facebookresearch/textlesslib.git
+# cd to your working directory
+# clone speech_ppl
+git clone https://github.com/andybi7676/speech_ppl.git
+# update submodules recursively
+git submodule update --init --recursive
+# create the venv under textlesslib for gslm and twist
 cd textlesslib
 uv python install 3.9
 uv venv --python 3.9
+source .venv/bin/activate
 # download older version of torch first
 uv pip install torch==1.13.1 torchaudio==0.13.1 transformers==4.53.0 datasets==3.6.0
+cd .. # go back to the root dir
 # install fairseq mannually
-uv pip install git+https://github.com/pytorch/fairseq.git@dd106d9534b22e7db859a6b87ffd7780c38341f8
-uv pip install -e .
+git clone https://github.com/facebookresearch/fairseq.git
+cd fairseq
+git checkout 3d262bb25690e4eb2e7d3c1309b1e9c406ca4b99 # use the specific hash
+cd ..
+# install fairseq
+uv pip install -e fairseq
+# install textlesslib
+uv pip install -e textlesslib
 ```
 
 ## Prepare GSLM Pretrained Model
