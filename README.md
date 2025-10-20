@@ -68,7 +68,7 @@ uv python install 3.9
 uv venv --python 3.9
 source .venv/bin/activate
 # download older version of torch first
-uv pip install torch==1.13.1 torchaudio==0.13.1 datasets==3.6.0
+uv pip install torch==2.6.0 torchaudio==2.6.0 transformers==4.53.0 datasets==3.6.0
 cd ../.. # go back to the root dir
 # install fairseq mannually
 git clone https://github.com/facebookresearch/fairseq.git
