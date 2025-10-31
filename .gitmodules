@@ -1,3 +1,6 @@
 [submodule "textlesslib"]
 	path = textlesslib
 	url = git@github.com:andybi7676/textlesslib.git
+[submodule "TASTE-SpokenLM"]
+	path = TASTE-SpokenLM
+	url = git@github.com:andybi7676/TASTE-SpokenLM.git

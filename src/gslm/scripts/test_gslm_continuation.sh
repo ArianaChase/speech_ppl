@@ -2,7 +2,7 @@ set -e
 
 root_dir=~/speech_ppl
 cd $root_dir
-source $root_dir/textlesslib/.venv/bin/activate
+source $root_dir/venv/gslm/.venv/bin/activate
 
 pretrained_model_dir=$root_dir/work/pretrained_models
 data_sample_dir=$root_dir/work/data/samples
