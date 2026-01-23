@@ -243,9 +243,9 @@ if __name__ == "__main__":
             e["prompt_sample_raw_units"] = prompt_sample_loss_results['raw_units']
             positive_continuation_result = get_per_token_losses(e["continuation_audio_positive"])
             negative_continuation_result = get_per_token_losses(e["continuation_audio_negative"])
-            e["positive_continuation_tokenwise_loss"] = positive_continuation_result['loss_per_token']
+            e["positive_continuation_tokenwise_loss"] = positive_continuation_result['loss_per_tokens']
             e["positive_continuation_raw_units"] = positive_continuation_result['raw_units']
-            e["negative_continuation_tokenwise_loss"] = negative_continuation_result['loss_per_token']
+            e["negative_continuation_tokenwise_loss"] = negative_continuation_result['loss_per_tokens']
             e["negative_continuation_raw_units"] = negative_continuation_result['raw_units']
             generated_audio = generate_continuation_audio(e["prompt_audio"])
             e["model_generated_continuation"] = {"sampling_rate": model.output_sample_rate, "array": generated_audio.squeeze().numpy()}
