@@ -1,4 +1,5 @@
 import os
+import csv
 import random
 import numpy as np
 import torch
@@ -121,13 +122,54 @@ class GslmSpeechPplWrapper:
             "logits": logits,
             "loss_all_tokens": loss_all_tokens
         }
+    
+def create_csv_file(output_dir, model, index): # gslm_001
+    root_dir = output_dir
+    filename = '%s/%s_%s' % (output_dir, model, index)
+
+    print("Creating csv with file name: ", filename, " ...")
+
+    with open(filename, mode="w") as csvfile:
+        fieldnames = ["Audio filename", "Mean of Per Token Losses"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+    
+    return filename
+
+def get_dataset_losses(dataset_dir, csv_name):
+
+    root_dir = dataset_dir
+    output_csv = csv_name
+
+    for files in os.listdir(root_dir):
+        filename = os.path.join(root_dir, files)
+        print("Running first file: ", filename)
+
+        audio, sr = torchaudio.load(filename)
+        audio = audio.to(device)
+
+        per_token_losses = get_per_token_losses(audio)["loss_all_tokens"]
+        per_token_losses_mean = torch.mean(per_token_losses)
+
+        with open(output_csv, mode="a", newline="") as csvfile:
+            fieldnames = ["Audio filename", "Mean of Per Token Losses"]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerow({"Audio filename": os.path.basename(filename), "Mean of Per Token Losses": per_token_losses_mean.item()})
+
+        print("Filename: ", filename)
+        print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
+        print(f"Mean of losses: {torch.mean(per_token_losses)}")
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--testing_audio_fpath", type=str, default=None)
+    #parser.add_argument("--testing_audio_fpath", type=str, default=None)
+    parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--language_model_dir", type=str, required=True)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--test_only", action="store_true")
+    parser.add_argument("--output_dir", type=str, required=True)
     args = parser.parse_args()
     
     # detect device
@@ -141,7 +183,7 @@ if __name__ == "__main__":
         device=device,
     )
 
-    print(f"Audio path name: {args.testing_audio_fpath}")
+    #print(f"Audio path name: {args.testing_audio_fpath}")
     print(f"Language model: {MODEL_NAME}")
     print(f"Model Input Sample Rate: {model.input_sample_rate}")
     print(f"Device: {device}")
@@ -152,21 +194,26 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-    if args.test_only:
-        assert args.testing_audio_fpath is not None, "Please provide testing audio file path for test_only mode."
-        
-        # load audio for testing
-        audio, sr = torchaudio.load(args.testing_audio_fpath)
-        audio = audio.to(device)
+    print("About to run get_dataset_losses")
 
-        # outputs
-        logits = get_per_token_losses(audio)["logits"]
-        per_token_losses = get_per_token_losses(audio)["loss_all_tokens"]
+    output_csv = create_csv_file(args.output_dir, "gslm", "001")
+    get_dataset_losses(args.dataset_dir, output_csv)
+
+    # if args.test_only:
+    #     assert args.testing_audio_fpath is not None, "Please provide testing audio file path for test_only mode."
         
-        print("Logits (raw, non-softmax prediction scores):", logits[:10], "...", logits.shape)
-        print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
-        print(f"Mean of losses: {torch.mean(per_token_losses)}")
-        exit(0)
+    #     # load audio for testing
+    #     audio, sr = torchaudio.load(args.testing_audio_fpath)
+    #     audio = audio.to(device)
+
+    #     # outputs
+    #     logits = get_per_token_losses(audio)["logits"]
+    #     per_token_losses = get_per_token_losses(audio)["loss_all_tokens"]
+        
+    #     print("Logits (raw, non-softmax prediction scores):", logits[:10], "...", logits.shape)
+    #     print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
+    #     print(f"Mean of losses: {torch.mean(per_token_losses)}")
+    #     exit(0)
     
 
     
