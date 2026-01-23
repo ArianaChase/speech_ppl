@@ -136,6 +136,7 @@ class GslmSpeechPplWrapper:
         input_ids, _durations = torch.unique_consecutive(units, return_counts=True)
         input_ids = input_ids.unsqueeze(0)  # add batch dim (1, seq_len)
 
+        # making training samples!!!
         labels = input_ids.clone()
         labels[:, :-1] = input_ids[:, 1:].clone() # shift tokens to the left
         labels[:, -1] = -100  # don't predict the last token as it has no next token
