@@ -2,6 +2,7 @@ import os
 import csv
 import random
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 import torchaudio
@@ -12,6 +13,11 @@ from fairseq import utils
 from textless.data.speech_encoder import SpeechEncoder
 from textless.vocoders.tacotron2.vocoder import TacotronVocoder
 from sampler import UnitLanguageModelSampler
+import time
+from tqdm import tqdm
+from sklearn.preprocessing import MinMaxScaler
+
+start_time = time.time()
 
 log_format = "[%(asctime)s] [%(levelname)s]: %(message)s"
 logging.basicConfig(format=log_format, level=logging.INFO)
@@ -130,20 +136,24 @@ def create_csv_file(output_dir, model, index): # gslm_001
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Audio filename", "Mean of Per Token Losses"]
+        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Mean of PTL"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
     return filename
 
-def get_dataset_losses(dataset_dir, csv_name):
+def get_directory_losses(dir, csv_name, spk):
 
-    root_dir = dataset_dir
+    root_dir = dir
     output_csv = csv_name
+    speaker = spk
 
-    for files in os.listdir(root_dir):
+    pbar = tqdm(os.listdir(root_dir))
+
+    for files in pbar:
+        pbar.set_description(f"Getting per token losses for file: {files}")
+
         filename = os.path.join(root_dir, files)
-        print("Running first file: ", filename)
 
         audio, sr = torchaudio.load(filename)
         audio = audio.to(device)
@@ -152,13 +162,13 @@ def get_dataset_losses(dataset_dir, csv_name):
         per_token_losses_mean = torch.mean(per_token_losses)
 
         with open(output_csv, mode="a", newline="") as csvfile:
-            fieldnames = ["Audio filename", "Mean of Per Token Losses"]
+            fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Mean of PTL"]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writerow({"Audio filename": os.path.basename(filename), "Mean of Per Token Losses": per_token_losses_mean.item()})
+            writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_token_losses_mean.item()})
 
-        print("Filename: ", filename)
-        print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
-        print(f"Mean of losses: {torch.mean(per_token_losses)}")
+        #print("Filename: ", filename)
+        #print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
+        #print(f"Mean of losses: {torch.mean(per_token_losses)}")
 
 
 
@@ -197,7 +207,34 @@ if __name__ == "__main__":
     print("About to run get_dataset_losses")
 
     output_csv = create_csv_file(args.output_dir, "gslm", "001")
-    get_dataset_losses(args.dataset_dir, output_csv)
+    input_dataset = args.dataset_dir
+
+    pbar = tqdm(os.listdir(input_dataset))
+
+    # loop through all directories of the dataset
+    counter = 0
+    for dirs in pbar:
+        if counter >= 3:
+            break
+        speaker = dirs[7:None]
+        pbar.set_description(f"Processing speaker: {speaker}")
+        dir_path = os.path.join(input_dataset, dirs)
+        # get losses for each file in the directory and record in csv
+        get_directory_losses(dir_path, output_csv, speaker)
+        counter += 1
+
+    scaler = MinMaxScaler()
+    output_csv_df = pd.read_csv(output_csv)
+    losses = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
+
+    normalized_col = pd.Series(scaler.fit_transform(losses).ravel())
+    output_csv_df["Normalized Per Token Losses"] = normalized_col
+
+    output_csv_df.to_csv(output_csv, index=False)
+
+    print(f"Program finished executing in {time.time() - start_time} seconds.")
+    
+    # get_directory_losses(args.dataset_dir, output_csv)
 
     # if args.test_only:
     #     assert args.testing_audio_fpath is not None, "Please provide testing audio file path for test_only mode."
