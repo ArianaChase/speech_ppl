@@ -13,7 +13,7 @@ mkdir -p $twist_output_dir
 
 echo "Running twist_scoring..."
 python /Users/hermitcrab/speech_ppl/src/twist/tools/twist_scoring.py \
-	--input_audio_fpath $data_sample_dir/test_tts.wav \
     --language_model_dir $twist_pretrained_model_dir \
+	--dataset_dir $root_dir/speechocean762/WAVE \
+	--output_dir $root_dir/work/outputs/twist/ \
 	--device cpu \
-	--test_only \

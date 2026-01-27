@@ -130,13 +130,12 @@ class GslmSpeechPplWrapper:
         }
     
 def create_csv_file(output_dir, model, index): # gslm_001
-    root_dir = output_dir
     filename = '%s/%s_%s' % (output_dir, model, index)
 
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Mean of PTL"]
+        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
@@ -162,7 +161,7 @@ def get_directory_losses(dir, csv_name, spk):
         per_token_losses_mean = torch.mean(per_token_losses)
 
         with open(output_csv, mode="a", newline="") as csvfile:
-            fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Mean of PTL"]
+            fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_token_losses_mean.item()})
 
@@ -204,7 +203,7 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-    print("About to run get_dataset_losses")
+    print("Calculating per token losses...")
 
     output_csv = create_csv_file(args.output_dir, "gslm", "001")
     input_dataset = args.dataset_dir
