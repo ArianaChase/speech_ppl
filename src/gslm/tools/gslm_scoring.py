@@ -8,6 +8,8 @@ import torch.nn.functional as F
 import torchaudio
 import logging
 import argparse
+import json
+import scipy.stats
 from omegaconf import OmegaConf
 from fairseq import utils
 from textless.data.speech_encoder import SpeechEncoder
@@ -147,7 +149,7 @@ def get_directory_losses(dir, csv_name, spk):
     output_csv = csv_name
     speaker = spk
 
-    pbar = tqdm(os.listdir(root_dir))
+    pbar = tqdm(sorted(os.listdir(root_dir)))
 
     for files in pbar:
         pbar.set_description(f"Getting per token losses for file: {files}")
@@ -169,7 +171,15 @@ def get_directory_losses(dir, csv_name, spk):
         #print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
         #print(f"Mean of losses: {torch.mean(per_token_losses)}")
 
+def parse_accuracy_scores(filename):
+    accuracy_scores = {}
+    with open(filename) as json_data:
+        data = json.load(json_data)
+        for audio_file in data:
+            value = data[audio_file]
+            accuracy_scores[os.path.basename(audio_file)] = value["accuracy"]
 
+    return accuracy_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -179,6 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--test_only", action="store_true")
     parser.add_argument("--output_dir", type=str, required=True)
+    parser.add_argument("--labels_dir", type=str, required=True)
     args = parser.parse_args()
     
     # detect device
@@ -192,7 +203,7 @@ if __name__ == "__main__":
         device=device,
     )
 
-    #print(f"Audio path name: {args.testing_audio_fpath}")
+    # info about the program
     print(f"Language model: {MODEL_NAME}")
     print(f"Model Input Sample Rate: {model.input_sample_rate}")
     print(f"Device: {device}")
@@ -203,17 +214,19 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-    print("Calculating per token losses...")
+    # calculating per token losses
 
+    print("Calculating per token losses...")
     output_csv = create_csv_file(args.output_dir, "gslm", "001")
     input_dataset = args.dataset_dir
-
-    pbar = tqdm(os.listdir(input_dataset))
+    
+    pbar = tqdm(sorted(os.listdir(input_dataset)))
+    print(pbar)
 
     # loop through all directories of the dataset
     counter = 0
     for dirs in pbar:
-        if counter >= 3:
+        if counter >= 5:
             break
         speaker = dirs[7:None]
         pbar.set_description(f"Processing speaker: {speaker}")
@@ -222,34 +235,26 @@ if __name__ == "__main__":
         get_directory_losses(dir_path, output_csv, speaker)
         counter += 1
 
+    # normalization (obsolete)
     scaler = MinMaxScaler()
     output_csv_df = pd.read_csv(output_csv)
-    losses = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
+    losses = output_csv_df["Raw Mean of Per Token Losses"].values
+    losses_reshaped = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
 
-    normalized_col = pd.Series(scaler.fit_transform(losses).ravel())
+    normalized_col = pd.Series(scaler.fit_transform(losses_reshaped).ravel())
     output_csv_df["Normalized Per Token Losses"] = normalized_col
 
     output_csv_df.to_csv(output_csv, index=False)
 
+    # get labels to compare to
+    score_labels = args.labels_dir
+    accuracy_scores = parse_accuracy_scores(score_labels)
+
+    # correlation
+    x = losses
+    y = list(accuracy_scores.values())[0:100]
+    print(len(x))
+    print(len(y))
+    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+
     print(f"Program finished executing in {time.time() - start_time} seconds.")
-    
-    # get_directory_losses(args.dataset_dir, output_csv)
-
-    # if args.test_only:
-    #     assert args.testing_audio_fpath is not None, "Please provide testing audio file path for test_only mode."
-        
-    #     # load audio for testing
-    #     audio, sr = torchaudio.load(args.testing_audio_fpath)
-    #     audio = audio.to(device)
-
-    #     # outputs
-    #     logits = get_per_token_losses(audio)["logits"]
-    #     per_token_losses = get_per_token_losses(audio)["loss_all_tokens"]
-        
-    #     print("Logits (raw, non-softmax prediction scores):", logits[:10], "...", logits.shape)
-    #     print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
-    #     print(f"Mean of losses: {torch.mean(per_token_losses)}")
-    #     exit(0)
-    
-
-    
