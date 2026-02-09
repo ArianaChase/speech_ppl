@@ -25,14 +25,11 @@ log_format = "[%(asctime)s] [%(levelname)s]: %(message)s"
 logging.basicConfig(format=log_format, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
-=======
 print(torch.cuda.is_available())  # True if a GPU is detected
 print(torch.cuda.device_count())  # Number of GPUs
 print(torch.cuda.current_device())  # Index of the current device
 print(torch.cuda.get_device_name(0))  # Name of GPU 0
 
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 MODEL_NAME="GSLM"
 GSLM_INPUT_SAMPLE_RATE = 16000
 
@@ -158,17 +155,12 @@ def get_directory_losses(dir, csv_name, spk):
     speaker = spk
 
     pbar = tqdm(sorted(os.listdir(root_dir)))
-<<<<<<< HEAD
-
-    for files in pbar:
-=======
     counter = 0
 
     for files in pbar:
         if counter >= 20:
             break
 
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
         pbar.set_description(f"Getting per token losses for file: {files}")
 
         filename = os.path.join(root_dir, files)
@@ -184,10 +176,7 @@ def get_directory_losses(dir, csv_name, spk):
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_token_losses_mean.item()})
 
-<<<<<<< HEAD
-=======
         counter += 1
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
         #print("Filename: ", filename)
         #print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
         #print(f"Mean of losses: {torch.mean(per_token_losses)}")
@@ -214,11 +203,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # detect device
-<<<<<<< HEAD
-    device = args.device
-=======
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     # create model
     model = GslmSpeechPplWrapper(
         language_model_dir=args.language_model_dir,
@@ -239,8 +224,6 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-<<<<<<< HEAD
-=======
     # get labels to compare to
     score_labels = args.labels_dir
     accuracy_scores = parse_accuracy_scores(score_labels)
@@ -258,7 +241,6 @@ if __name__ == "__main__":
 
     #print(first)
 
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     # calculating per token losses
 
     print("Calculating per token losses...")
@@ -266,24 +248,10 @@ if __name__ == "__main__":
     input_dataset = args.dataset_dir
     
     pbar = tqdm(sorted(os.listdir(input_dataset)))
-<<<<<<< HEAD
-    print(pbar)
-=======
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 
     # loop through all directories of the dataset
     counter = 0
     for dirs in pbar:
-<<<<<<< HEAD
-        if counter >= 5:
-            break
-        speaker = dirs[7:None]
-        pbar.set_description(f"Processing speaker: {speaker}")
-        dir_path = os.path.join(input_dataset, dirs)
-        # get losses for each file in the directory and record in csv
-        get_directory_losses(dir_path, output_csv, speaker)
-        counter += 1
-=======
         #if counter >= 5:
         #   break
         speaker = dirs[7:None]
@@ -293,7 +261,6 @@ if __name__ == "__main__":
             # get losses for each file in the directory and record in csv
             get_directory_losses(dir_path, output_csv, speaker)
         #counter += 1
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 
     # normalization (obsolete)
     scaler = MinMaxScaler()
@@ -306,19 +273,9 @@ if __name__ == "__main__":
 
     output_csv_df.to_csv(output_csv, index=False)
 
-<<<<<<< HEAD
-    # get labels to compare to
-    score_labels = args.labels_dir
-    accuracy_scores = parse_accuracy_scores(score_labels)
-
-    # correlation
-    x = losses
-    y = list(accuracy_scores.values())[0:100]
-=======
     # correlation
     x = losses
   
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     print(len(x))
     print(len(y))
     print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")

@@ -5,10 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import argparse
 import os
-<<<<<<< HEAD
-=======
 import scipy.stats
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 from transformers import AutoModelForCausalLM
 from textless.vocoders.hifigan.vocoder import CodeHiFiGANVocoder
 from textless.data.speech_encoder import SpeechEncoder
@@ -17,11 +14,8 @@ from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler
 import csv 
 import pandas as pd
-<<<<<<< HEAD
-=======
 import json 
 from sklearn.preprocessing import MinMaxScaler
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 
 start_time = time.time()
 
@@ -119,17 +113,12 @@ def get_directory_losses(dir, csv_name, spk):
     speaker = spk
 
     pbar = tqdm(os.listdir(root_dir))
-<<<<<<< HEAD
-
-    for files in pbar:
-=======
     counter = 0
 
     for files in pbar:
         if counter >= 20:
             break
 
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
         pbar.set_description(f"Getting per token losses for file: {files}")
 
         filename = os.path.join(root_dir, files)
@@ -145,17 +134,12 @@ def get_directory_losses(dir, csv_name, spk):
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_token_losses_mean.item()})
 
-<<<<<<< HEAD
-=======
         counter += 1
         
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
         #print("Filename: ", filename)
         #print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
         #print(f"Mean of losses: {torch.mean(per_token_losses)}")
 
-<<<<<<< HEAD
-=======
 
 def parse_accuracy_scores(filename):
     accuracy_scores = {}
@@ -167,16 +151,12 @@ def parse_accuracy_scores(filename):
 
     return accuracy_scores
 
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Twist Speech PPL Wrapper Test")
     argparser.add_argument("--language_model_dir", type=str, required=True, help="Path to pretrained twist model")
     argparser.add_argument("--dataset_dir", type=str, required=True, help="Path to input dataset")
     argparser.add_argument("--output_dir", type=str, required=True)
-<<<<<<< HEAD
-=======
     argparser.add_argument("--labels_dir", type=str, required=True)
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     argparser.add_argument("--device", type=str, default=None, help="Device to use, e.g., 'cpu' or 'cuda'")
    
     args = argparser.parse_args()
@@ -196,8 +176,6 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-<<<<<<< HEAD
-=======
     # get labels to compare to
     score_labels = args.labels_dir
     accuracy_scores = parse_accuracy_scores(score_labels)
@@ -209,7 +187,6 @@ if __name__ == "__main__":
         if key[1:5] != "1076":
             y.append(value)
     
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     print("Calculating per token losses...")
     
     output_csv = create_csv_file(args.output_dir, "twist", "001")
@@ -220,17 +197,6 @@ if __name__ == "__main__":
     # loop through all directories of the dataset
     counter = 0
     for dirs in pbar:
-<<<<<<< HEAD
-        if counter > 1:
-            break
-        speaker = dirs[7:None]
-        pbar.set_description(f"Processing speaker: {speaker}")
-        dir_path = os.path.join(input_dataset, dirs)
-        # get losses for each file in the directory and record in csv
-        get_directory_losses(dir_path, output_csv, speaker)
-        counter += 1
-
-=======
         #if counter >= 5:
         #    break
         speaker = dirs[7:None]
@@ -243,7 +209,6 @@ if __name__ == "__main__":
         #counter += 1
 
     print("coun:" ,counter)
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     scaler = MinMaxScaler()
     output_csv_df = pd.read_csv(output_csv)
     losses = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
@@ -253,8 +218,6 @@ if __name__ == "__main__":
 
     output_csv_df.to_csv(output_csv, index=False)
 
-<<<<<<< HEAD
-=======
      # normalization (obsolete)
     scaler = MinMaxScaler()
     output_csv_df = pd.read_csv(output_csv)
@@ -272,7 +235,6 @@ if __name__ == "__main__":
     print(len(x))
     print(len(y))
     print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
->>>>>>> 3ba7003 (Commit from remote (full correlation works: gslm, twist, taslm))
     print(f"Program finished executing in {time.time() - start_time} seconds.")
 
 
