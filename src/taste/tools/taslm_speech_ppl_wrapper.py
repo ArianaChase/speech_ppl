@@ -25,6 +25,7 @@ class TaslmSpeechPPLWrapper:
             pretrained_model_dir,
             attn_implementation=attn_implementation,
         )
+        self.model = self.model.to(torch.float32)
         self.model = self.model.to(self.device)
         self.model.eval()
         self.processor = TasteProcessor.from_pretrained(
