@@ -14,7 +14,7 @@ gslm_output_dir=$root_dir/work/outputs/gslm
 mkdir -p $gslm_output_dir
 
 echo "Running gslm_scoring..."
-python /Users/hermitcrab/speech_ppl/src/gslm/tools/gslm_scoring.py \
+python $root_dir/src/gslm/tools/gslm_scoring.py \
 	--dataset_dir $root_dir/speechocean762/WAVE/ \
     --language_model_dir $pretrained_model_dir/gslm/hubert100_lm \
 	--output_dir $gslm_output_dir \

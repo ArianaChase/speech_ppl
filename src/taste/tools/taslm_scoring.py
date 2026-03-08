@@ -169,8 +169,11 @@ def get_directory_losses(dir, csv_name, spk):
     speaker = spk
 
     pbar = tqdm(sorted(os.listdir(root_dir)))
+    counter = 0
 
     for files in pbar:
+        if counter >= 20:
+            break
         pbar.set_description(f"Getting per token losses for file: {files}")
 
         filename = os.path.join(root_dir, files)
@@ -188,7 +191,8 @@ def get_directory_losses(dir, csv_name, spk):
             fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_word_losses_mean.item()})
-
+        
+        counter += 1
 
 def parse_accuracy_scores(filename):
     accuracy_scores = {}
@@ -259,7 +263,11 @@ if __name__ == "__main__":
     score_labels = args.labels_dir
     accuracy_scores = parse_accuracy_scores(score_labels)
     accuracy_scores = dict(sorted(accuracy_scores.items()))
-    y = list(accuracy_scores.values())
+    y = []
+    for key, value in accuracy_scores.items():
+        print(key[1:5])
+        if key[1:5] != "1076":
+            y.append(value)
 
     # calculating per word losses
     print("Calculating per word losses...")
