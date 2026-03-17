@@ -1,12 +1,12 @@
 import os
 import json
 
-train_text = "/home/u5504709/speech_ppl/speechocean762/train/text"
-test_text = "/home/u5504709/speech_ppl/speechocean762/test/text"
+train_text = "/home/u5504709/new_work/speech_ppl/speechocean762/train/text"
+test_text = "/home/u5504709/new_work/speech_ppl/speechocean762/test/text"
 
     
 def create_lab_files(file):
-    root_path = "/home/u5504709/speech_ppl/src/mfa/WAVE"
+    root_path = "/home/u5504709/new_work/speech_ppl/src/mfa/WAVE"
 
     with open(file, "r") as f:
         #counter = 0
