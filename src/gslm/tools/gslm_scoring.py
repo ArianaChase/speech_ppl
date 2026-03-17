@@ -18,7 +18,7 @@ from sampler import UnitLanguageModelSampler
 import time
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler
-
+from datetime import datetime
 start_time = time.time()
 
 log_format = "[%(asctime)s] [%(levelname)s]: %(message)s"
@@ -194,6 +194,7 @@ def parse_accuracy_scores(filename):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     #parser.add_argument("--testing_audio_fpath", type=str, default=None)
+    parser.add_argument("--name", type=str, required=True)
     parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--language_model_dir", type=str, required=True)
     parser.add_argument("--device", type=str, default="cpu")
@@ -260,7 +261,7 @@ if __name__ == "__main__":
             dir_path = os.path.join(input_dataset, dirs)
             # get losses for each file in the directory and record in csv
             get_directory_losses(dir_path, output_csv, speaker)
-        #counter += 1
+        counter += 1
 
     # normalization (obsolete)
     scaler = MinMaxScaler()
@@ -274,10 +275,15 @@ if __name__ == "__main__":
     output_csv_df.to_csv(output_csv, index=False)
 
     # correlation
-    x = losses
-  
-    print(len(x))
-    print(len(y))
-    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+    x = -np.array(losses)  
 
-    print(f"Program finished executing in {time.time() - start_time} seconds.")
+    print(f"Sample count: {len(x)}") 
+    print(f"Labels count: {len(y)}") 
+    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}") 
+    print("Speaker count: ", counter) 
+
+    # Capture and format the finish time 
+    now = datetime.now() 
+    finish_time = now.strftime("%m-%d-%Y %H:%M") 
+    print(f"Date and time at completion: {finish_time}") 
+    print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")

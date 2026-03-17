@@ -11,10 +11,12 @@ data_sample_dir=$root_dir/work/data/samples
 gslm_dir=$root_dir/textlesslib/examples/gslm
 gslm_output_dir=$root_dir/work/outputs/gslm
 
+name=gslm_scoring_accuracy
 mkdir -p $gslm_output_dir
 
 echo "Running gslm_scoring..."
 python $root_dir/src/gslm/tools/gslm_scoring.py \
+	--name $name \
 	--dataset_dir $root_dir/speechocean762/WAVE/ \
     --language_model_dir $pretrained_model_dir/gslm/hubert100_lm \
 	--output_dir $gslm_output_dir \
