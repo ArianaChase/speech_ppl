@@ -236,8 +236,6 @@ if __name__ == "__main__":
         if key[1:5] != "1076":
             y.append(value)
 
-
-
     #first = dict(list(accuracy_scores.items())[:100])
 
     #print(first)
