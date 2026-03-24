@@ -337,6 +337,12 @@ class ELMDecoderWrapper(BaseDecoderWrapper):
     ):
         super().__init__(elm, input_dim, decoder_dim, output_dim, aux_output_dim, output_layer, n_res_blocks, aux_output_layer_idx, token_emb_dim)
         self.decoder = elm.transformer
+
+        # Ensure all submodules are off the meta device
+        for name, res in self.decoder.named_buffers():
+            if res.is_meta:
+                # This fixes the "cannot copy out of meta" by assigning a real tensor
+                setattr(self.decoder, name, torch.zeros_like(res, device=elm.device))
         
 
     def forward(

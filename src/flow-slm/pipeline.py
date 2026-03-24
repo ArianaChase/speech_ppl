@@ -26,11 +26,23 @@ class GSLMPipeline(nn.Module):
 
         attn_implementation = "flash_attention_2" if self.conf.model.flash_attention else "eager"
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() or attn_implementation == 'flash_attention_2' else torch.float32
+
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+       
         decoder_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=dtype,
-            trust_remote_code=True
+            trust_remote_code=True,
+            # low_cpu_mem_usage=True is fine, but we must materialize next
         )
+
+        # CRITICAL: This forces all parameters and buffers out of "meta" state
+        decoder_model.to_empty(device=device) 
+        # Note: to_empty creates uninitialized data, so we need to load weights
+        decoder_model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, trust_remote_code=True
+        ).to(device)
 
         # Initialize normalization (moved to helper)
         self._init_normalization()
