@@ -5,6 +5,8 @@ import torch
 import lightning as pl
 from pathlib import Path
 import glob
+import numpy as np
+import csv
 import shutil
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
@@ -74,7 +76,6 @@ def batch_pad_right(tensors: list, mode="constant", value=0):
     batched = torch.stack(batched)
 
     return batched, torch.tensor(valid)
-
 
 def pad_right_to(
     tensor: torch.Tensor, target_shape: (list, tuple), mode="constant", value=0,
@@ -211,29 +212,88 @@ class SaveAtSpecificStep(pl.Callback):
             trainer.save_checkpoint(checkpoint_path)
 
             
-def writing_output_to_file(output, output_dir, token=False):
-    if token:
-        f_token_loss = open(os.path.join(output_dir, f"token_loss.txt"), "w")
+# def writing_output_to_file(output, output_dir, token=False):
+#     if token:
+#         f_token_loss = open(os.path.join(output_dir, f"token_loss.txt"), "w")
 
-    with open(os.path.join(output_dir, f"loss.txt"), "w") as f_loss:
+#     with open(os.path.join(output_dir, f"loss.txt"), "w") as f_loss:
+#         for batch in output:
+#             if token:
+#                 for id, loss, token_loss in zip(*batch):
+#                     if type(loss) == torch.Tensor and loss.ndim > 0:
+#                         loss = loss.cpu().numpy()
+#                         # turn into string
+#                         loss = " ".join([str(l) for l in loss])
+#                     if type(token_loss) == torch.Tensor and token_loss.ndim > 0:
+#                         token_loss = token_loss.cpu().numpy()
+#                         token_loss = " ".join([str(l) for l in token_loss])
+#                     f_loss.write(f"{id} {loss}\n")
+#                     f_token_loss.write(f"{id} {token_loss}\n")
+#             else:
+#                 for id, loss in zip(*batch):
+#                     if type(loss) == torch.Tensor:
+#                         loss = loss.cpu().numpy()
+#                         loss = " ".join([str(l) for l in loss])
+#                     f_loss.write(f"{id} {loss}\n")
+#     return
+
+
+def writing_output_to_file(output, output_dir, token=False):
+    """
+    Writes prediction results to a CSV file.
+    Handles variable output lengths from the predict_step.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "predictions.csv")
+
+    # Define headers based on the presence of token losses
+    if token:
+        # Matches the 6 items: ids, raw_token, raw_flow, utt_token, utt_flow, combined
+        headers = [
+            "id", 
+            "raw_token_losses", 
+            "raw_flow_losses", 
+            "utt_token_loss", 
+            "utt_flow_loss", 
+            "weighted_combined_score"
+        ]
+    else:
+        # Matches the 3 items: ids, raw_flow, utt_flow
+        headers = [
+            "id", 
+            "raw_flow_losses", 
+            "utt_flow_loss"
+        ]
+
+    with open(output_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+
         for batch in output:
-            if token:
-                for id, loss, token_loss in zip(*batch):
-                    if type(loss) == torch.Tensor and loss.ndim > 0:
-                        loss = loss.cpu().numpy()
-                        # turn into string
-                        loss = " ".join([str(l) for l in loss])
-                    if type(token_loss) == torch.Tensor and token_loss.ndim > 0:
-                        token_loss = token_loss.cpu().numpy()
-                        token_loss = " ".join([str(l) for l in token_loss])
-                    f_loss.write(f"{id} {loss}\n")
-                    f_token_loss.write(f"{id} {token_loss}\n")
-            else:
-                for id, loss in zip(*batch):
-                    if type(loss) == torch.Tensor:
-                        loss = loss.cpu().numpy()
-                        loss = " ".join([str(l) for l in loss])
-                    f_loss.write(f"{id} {loss}\n")
+            # batch is a tuple of lists/tensors: (ids, val1, val2, ...)
+            # zip(*batch) lets us iterate row by row (utterance by utterance)
+            for items in zip(*batch):
+                row = []
+                for i, val in enumerate(items):
+                    # Item 0 is the ID (string)
+                    if i == 0:
+                        row.append(val)
+                    else:
+                        # Convert torch.Tensor to numpy/python types
+                        if isinstance(val, torch.Tensor):
+                            val = val.cpu().numpy()
+                        
+                        # Handle multi-dimensional arrays (the "raw" token-level losses)
+                        # We turn them into a space-separated string so the CSV stays 1D per row
+                        if isinstance(val, np.ndarray) and val.ndim > 0:
+                            row.append(" ".join(map(str, val.flatten())))
+                        else:
+                            # Scalar values (utterance level scores) stored as floats
+                            row.append(float(val))
+                
+                writer.writerow(row)
+
+    print(f"Predictions saved to: {output_path}")
     return
 
 def import_module_from_path(module_name, module_path):
@@ -250,6 +310,7 @@ def import_module_from_path(module_name, module_path):
     except Exception as e:
         print(f"Failed to import module from path '{module_path}': {e}")
         return None
+
 
 def extract_number(file_path):
     # Extract the file name from the path

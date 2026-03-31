@@ -27,6 +27,9 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from utils import replace_values, writing_output_to_file, SaveAtSpecificStep, select_latest_ckpt
 from lightning.pytorch.plugins.environments import SLURMEnvironment
 from dataset import SpeechDataModule
+from datetime import datetime
+import time
+start_time = time.time()
 
 class LanguageModeling(pl.LightningModule):
     """Main training class for continuous GSLM.
@@ -130,6 +133,9 @@ class LanguageModeling(pl.LightningModule):
             was_training = self.gslm_pipeline.training
             self.gslm_pipeline.eval()
             with torch.no_grad():
+                print("====== VALIDATE at run_pipeline =======")
+                print(wavs.shape, wav_len)
+
                 out = self.gslm_pipeline(wavs, wav_len)
             if was_training:
                 self.gslm_pipeline.train()
@@ -174,7 +180,7 @@ class LanguageModeling(pl.LightningModule):
 
         return final_token_loss
 
-    def forward(self, batch, reduction='token'):
+    def forward(self, batch, reduction="token"):
         ids, wavs, wav_len = batch
         wav_len = wav_len.float()
         weighted_combined_utterance_scores = None
@@ -205,10 +211,10 @@ class LanguageModeling(pl.LightningModule):
 
         # 3. combined and weighted (acoustic + linguistic) utterance-level average token scores
             weighted_combined_utterance_scores = utterance_flow_loss_avgs * self.conf.optimizer.loss_weight + self.conf.optimizer.token_loss_weight * utterance_token_loss_avgs
-
+        
         results = {
             "raw_token_losses": raw_token_loss_vals,
-            "row_flow_losses": raw_flow_loss_vals,
+            "raw_flow_losses": raw_flow_loss_vals,
             "utterance_token_losses": utterance_token_loss_avgs, # type: ignore
             "utterance_flow_losses": utterance_flow_loss_avgs,
             "weighted_combined_utterance_scores": weighted_combined_utterance_scores
@@ -227,6 +233,8 @@ class LanguageModeling(pl.LightningModule):
             utterance_flow_losses = results["utterance_flow_losses"]
             weighted_combined_utterance_scores = results["weighted_combined_utterance_scores"]
 
+            print(results)
+
 
         if raw_token_losses is not None:
             return ids, -raw_token_losses, -raw_flow_losses, -utterance_token_losses, -utterance_flow_losses, -weighted_combined_utterance_scores
@@ -238,6 +246,7 @@ class LanguageModeling(pl.LightningModule):
     
 def main():
     parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--data_dir", help="Path to dataset folder", default=None)
     parser.add_argument("--ckpt_path", type=str, help="GSLM checkpoint, for inference only", default=None)
     parser.add_argument("--conf", help="Path to config file")
@@ -260,23 +269,31 @@ def main():
         args.use_k_future_tokens = conf.model.extra_future_tokens
  
     # evaluation / prediction only
-    print(f"evaluation only, loading {args.ckpt_path}")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Evaluation only, loading {args.ckpt_path}...")
     language_modeling = LanguageModeling(args=args, conf=conf)
+    
+    print(f"Loading complete, on device: {language_modeling.device}.")
 
+    for module in language_modeling.modules():
+        if hasattr(module, 'to_empty'):
+            module.to_empty(device='cpu') # Turns Meta into Real CPU tensors
+
+    print("Loading state dictionary...")
     state_dict = torch.load(args.ckpt_path, map_location="cpu")
-    print(state_dict.keys())
-
 
     # defensive cleanup of misnamed keys if present
+    print("Performing defensive cleanup of misnamed keys...")
     for bad_key in ("gsml_pipeline.decoder.stop_token.weight", "gsml_pipeline.decoder.stop_token.bias"):
         if bad_key in state_dict:
             state_dict.pop(bad_key, None)
     try:
         language_modeling.load_state_dict(state_dict)
     except Exception:
-        language_modeling.load_state_dict(state_dict, strict=True)
+        language_modeling.load_state_dict(state_dict, strict=False)
 
-    language_modeling.to("cuda") # CRITICAL
+    print("State dictionary loaded. Switching to eval mode...")
+
     language_modeling.eval()
 
     # preparing dataloader
@@ -293,10 +310,18 @@ def main():
         use_distributed_sampler=False,
     )
 
+    print("Starting prediction...")
     data = SpeechDataModule(args, conf)
     data.setup(stage="predict")
+    print(data)
     output = trainer.predict(language_modeling, data)
     writing_output_to_file(output, args.prediction_output_dir, token=conf.optimizer.token_loss_weight > 0)
+
+    # Capture and format the finish time 
+    now = datetime.now() 
+    finish_time = now.strftime("%m-%d-%Y %H:%M") 
+    print(f"Date and time at completion: {finish_time}") 
+    print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")
 
 if __name__ == "__main__":
     print("cuda_available()", torch.cuda.is_available())

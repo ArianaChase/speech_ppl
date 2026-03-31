@@ -13,8 +13,10 @@ id="$root_dir/src/flow-slm/predict_id.txt"
 ckpt_path="$root_dir/work/pretrained_models/flow-slm/1b_extend.bin"
 k_future_tokens=4
 batch_size=1
+name="flowslm_scoring_accuracy"
 
 python $root_dir/src/flow-slm/dataloader_trainer.py \
+    --name $name \
     --data_dir $data_dir \
     --conf $conf_path  \
     --predict_id_file $id \

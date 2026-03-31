@@ -26,23 +26,16 @@ class GSLMPipeline(nn.Module):
 
         attn_implementation = "flash_attention_2" if self.conf.model.flash_attention else "eager"
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() or attn_implementation == 'flash_attention_2' else torch.float32
-
-
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
        
         decoder_model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-            # low_cpu_mem_usage=True is fine, but we must materialize next
+            torch_dtype=dtype,   # or float16
+            low_cpu_mem_usage=False,      # ← IMPORTANT
+            device_map="cpu",              # ← IMPORTANT
+            trust_remote_code=True
         )
 
-        # CRITICAL: This forces all parameters and buffers out of "meta" state
-        decoder_model.to_empty(device=device) 
-        # Note: to_empty creates uninitialized data, so we need to load weights
-        decoder_model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, trust_remote_code=True
-        ).to(device)
+        #print(decoder_model)
 
         # Initialize normalization (moved to helper)
         self._init_normalization()
@@ -115,7 +108,7 @@ class GSLMPipeline(nn.Module):
                     token_emb_dim=self.token_emb_dim,
                 )
             # use self._lm for config access
-            self.pad_index = decoder_model.config.pad_token_id
+            self.pad_index = decoder_model.config.eos_token_id
             self.bos_index = decoder_model.config.bos_token_id
             self.eos_index = decoder_model.config.eos_token_id
 
@@ -146,7 +139,8 @@ class GSLMPipeline(nn.Module):
             padding_mask = length_to_mask(abs_len, max_len=prev_tokens.shape[1], dtype=torch.bool)
         logits, aux_output = self.decoder(prev_tokens, padding_mask)
         return logits, aux_output
-
+    
+    
     def _get_ssl_feats(self, wavs, wav_len):
         with torch.no_grad():
             if self.conf.model.ssl_model == "mimi" and hasattr(self.conf.model, "n_quantizers") and self.conf.model.n_quantizers > 0:

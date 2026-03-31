@@ -2,6 +2,7 @@ from torch.utils.data import Dataset, DataLoader
 import lightning.pytorch as pl
 from datasets import concatenate_datasets
 import torchaudio
+import soundfile as sf
 import torchaudio.functional as F
 import os
 from datasets import load_dataset
@@ -160,7 +161,11 @@ class SpeechDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[str, torch.Tensor]:
         uid = self.ids[index]
         path = self.wav_list[index]
-        wav, sr = torchaudio.load(path)
+        print("sound file path: ", path)
+
+        wav, sr = sf.read(path)
+        wav = torch.from_numpy(wav).float()
+
         if wav.dim() == 2:
             wav = wav[0]
         if sr != self.default_sr:
@@ -176,6 +181,10 @@ class Collator:
         ids = [entry[0] for entry in batch]
         wavs = [entry[1] for entry in batch]
         wavs, wav_len = batch_pad_right(wavs)
+
+        print("wavs shape:", wavs.shape)
+        print("wav_len:", wav_len)
+        print("max len:", wav_len.max())
         return ids, wavs, wav_len
 
 

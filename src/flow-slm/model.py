@@ -20,6 +20,9 @@ class MimiEncoder(torch.nn.Module):
     def __init__(self, freeze: bool = True, n_quantizers: int = 0):
         super().__init__()
         self.model = MimiModel.from_pretrained("kyutai/mimi")
+        for name, module in self.model.named_modules():
+            if hasattr(module, "kernel_size"):
+                print(name, module.kernel_size)
         self.feature_extractor = AutoFeatureExtractor.from_pretrained("kyutai/mimi")
         self.freeze = freeze
         self.n_quantizers = n_quantizers
@@ -42,7 +45,12 @@ class MimiEncoder(torch.nn.Module):
         """
         context = torch.no_grad() if self.freeze else nullcontext()
         with context:
+            for name, module in self.model.named_modules():
+                if hasattr(module, "kernel_size"):
+                    print("kernel size at embeddings:", type(module.kernel_size), module.kernel_size)
+
             embeddings = self.model.encoder(wavs.unsqueeze(dim=1))
+            
             encoder_outputs = self.model.encoder_transformer(
                 embeddings.transpose(1, 2), past_key_values=None, return_dict=None
             )
