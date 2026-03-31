@@ -161,7 +161,7 @@ class SpeechDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[str, torch.Tensor]:
         uid = self.ids[index]
         path = self.wav_list[index]
-        print("sound file path: ", path)
+        # print("sound file path: ", path)
 
         wav, sr = sf.read(path)
         wav = torch.from_numpy(wav).float()
@@ -182,9 +182,9 @@ class Collator:
         wavs = [entry[1] for entry in batch]
         wavs, wav_len = batch_pad_right(wavs)
 
-        print("wavs shape:", wavs.shape)
-        print("wav_len:", wav_len)
-        print("max len:", wav_len.max())
+        # print("wavs shape:", wavs.shape)
+        # print("wav_len:", wav_len)
+        # print("max len:", wav_len.max())
         return ids, wavs, wav_len
 
 

@@ -13,11 +13,11 @@ def calc_correlation(file, labels, mode="combined"):
     losses = []
 
     if (mode == "utt_token"):
-        losses = loss_df["utt_token"].astype(float).values
+        losses = loss_df["utt_token_loss"].astype(float).values
     elif (mode == "utt_flow"):
-        losses = loss_df["utt_flow"].astype(float).values
+        losses = loss_df["utt_flow_loss"].astype(float).values
     elif (mode == "combined"):
-        losses = loss_df["combined"].astype(float).values
+        losses = loss_df["weighted_combined_score"].astype(float).values
     else:
         print("Mode not valid.")
 
@@ -65,11 +65,11 @@ if __name__ == "__main__":
     utt_flow_correlation = calc_correlation(loss_file, y, "utt_flow")
     combined_correlation = calc_correlation(loss_file, y, "combined")
 
-    print(f"Sample count: {len(x)}") 
-    print(f"Labels count: {len(y)}") 
-    print(f"Correlation value for utterance-level literary tokens is: {utt_token_correlation}") 
-    print(f"Correlation value for utterance-level acoustic tokens is: {utt_flow_correlation}")
-    print(f"Weighted and combined correlation value is: {combined_correlation}")
+    print(f"Sample count: {utt_flow_correlation[0]}") 
+    print(f"Labels count: {utt_flow_correlation[1]}") 
+    print(f"Correlation value for utterance-level literary tokens is: {utt_token_correlation[2]}") 
+    print(f"Correlation value for utterance-level acoustic tokens is: {utt_flow_correlation[2]}")
+    print(f"Weighted and combined correlation value is: {combined_correlation[2]}")
 
 
 

@@ -182,12 +182,22 @@ class LanguageModeling(pl.LightningModule):
 
     def forward(self, batch, reduction="token"):
         ids, wavs, wav_len = batch
+        # 1. Is the audio itself NaN?
+        if torch.isnan(wavs).any():
+            print("CRITICAL: Input audio (wavs) contains NaN")
+
         wav_len = wav_len.float()
         weighted_combined_utterance_scores = None
 
         # run pipeline (use eval mode for non-training forward)
         eval_mode = not self.training
         logits, ssl_feats, padding_mask, token_logits, tokens, token_padding_mask = self._run_pipeline(wavs, wav_len, eval_mode)
+
+        # 2. Is the Model outputting NaN?
+        if torch.isnan(logits).any():
+            print("CRITICAL: Model Logits are NaN")
+        if torch.isnan(ssl_feats).any():
+            print("CRITICAL: SSL Features are NaN")
 
         flow_loss = self._compute_flow_loss(logits, ssl_feats)
         token_loss = self._compute_token_loss(token_logits, tokens, token_padding_mask, self.training)
@@ -211,6 +221,7 @@ class LanguageModeling(pl.LightningModule):
 
         # 3. combined and weighted (acoustic + linguistic) utterance-level average token scores
             weighted_combined_utterance_scores = utterance_flow_loss_avgs * self.conf.optimizer.loss_weight + self.conf.optimizer.token_loss_weight * utterance_token_loss_avgs
+
         
         results = {
             "raw_token_losses": raw_token_loss_vals,
@@ -275,22 +286,36 @@ def main():
     
     print(f"Loading complete, on device: {language_modeling.device}.")
 
-    for module in language_modeling.modules():
-        if hasattr(module, 'to_empty'):
-            module.to_empty(device='cpu') # Turns Meta into Real CPU tensors
-
     print("Loading state dictionary...")
     state_dict = torch.load(args.ckpt_path, map_location="cpu")
 
     # defensive cleanup of misnamed keys if present
     print("Performing defensive cleanup of misnamed keys...")
-    for bad_key in ("gsml_pipeline.decoder.stop_token.weight", "gsml_pipeline.decoder.stop_token.bias"):
-        if bad_key in state_dict:
-            state_dict.pop(bad_key, None)
+    
+    if "gslm_pipeline.ssl_model.resample.kernel" in state_dict:
+        print("Removing unexpected resample.kernel from state_dict...")
+        state_dict.pop("gslm_pipeline.ssl_model.resample.kernel")
+
+    # Defensive cleanup of other known bad keys
+    for bad_key in ("gslm_pipeline.decoder.stop_token.weight", "gslm_pipeline.decoder.stop_token.bias"):
+        state_dict.pop(bad_key, None)
+
+    # Load with diagnostic info
+    missing_keys, unexpected_keys = language_modeling.load_state_dict(state_dict, strict=False)
+    
+    if missing_keys:
+        print("! WARNING: The following keys are MISSING from the checkpoint:")
+        for k in missing_keys:
+            print(f"  - {k}")
+        print("Missing keys will result in NaNs if you used to_empty() or if they are layer weights.")
+    
+    if unexpected_keys:
+        print(f"! NOTE: Ignored {len(unexpected_keys)} unexpected keys from checkpoint.")
+
     try:
         language_modeling.load_state_dict(state_dict)
     except Exception:
-        language_modeling.load_state_dict(state_dict, strict=False)
+        language_modeling.load_state_dict(state_dict, strict=True)
 
     print("State dictionary loaded. Switching to eval mode...")
 
