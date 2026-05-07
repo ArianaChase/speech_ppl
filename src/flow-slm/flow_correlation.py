@@ -36,7 +36,7 @@ def parse_accuracy_scores(filename):
         data = json.load(json_data)
         for audio_file in data:
             value = data[audio_file]
-            accuracy_scores[os.path.basename(audio_file)] = value["accuracy"]
+            accuracy_scores[os.path.basename(audio_file)] = value["completeness"]
 
     return accuracy_scores
 
