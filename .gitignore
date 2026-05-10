@@ -1,10 +1,13 @@
 # custom dirs
 work
+/home/u5504709/new_work/speech_ppl/work/data
+/home/u5504709/new_work/speech_ppl/work/pretrained_models
 transformers
 local/
 exp/
 tmp*.*
 fairseq
+/home/u5504709/new_work/speech_ppl/work/outputs/textgrids
 # egs/taste/emilia_libritts
 
 # Byte-compiled / optimized / DLL files
