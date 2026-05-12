@@ -13,9 +13,11 @@ def create_predict_id(dataset):
 
                 for file in os.listdir(os.path.join(dataset, speaker)):
                     if file_count >= 20:
-                        print("file: ", file)
-                        f.write("%s/%s\n" % (speaker, Path(file).stem))
-                        total += 1
+                        break
+
+                    print("file: ", file)
+                    f.write("%s/%s\n" % (speaker, Path(file).stem))
+                    total += 1
                     file_count += 1
     
     print("Total files processed: ", total)

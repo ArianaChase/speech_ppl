@@ -202,4 +202,3 @@ def get_dataloader(dataset: Dataset, batch_size: int, shuffle: bool = True, batc
                                  num_workers=num_workers, collate_fn=collate_fn,
                                  pin_memory=True, prefetch_factor=prefetch_factor)
     return data_loader
-

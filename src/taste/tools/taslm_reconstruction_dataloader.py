@@ -180,7 +180,7 @@ if __name__ == "__main__":
     #print(human_scores)
 
     input_dataset = "/home/u5504709/new_work/speech_ppl/speechocean762/WAVE/"
-    data_size = 250
+    data_size = 2
     audio_info = getWAVfiles(input_dataset, data_size, human_scores) # returns a list of dictionaries in the format of {"path" : path to audio file}
     print("Saved ", len(audio_info), " audio files from input dataset.")
     #print(audio_info[0:100])

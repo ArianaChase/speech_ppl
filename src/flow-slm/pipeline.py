@@ -27,13 +27,15 @@ class GSLMPipeline(nn.Module):
         attn_implementation = "flash_attention_2" if self.conf.model.flash_attention else "eager"
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() or attn_implementation == 'flash_attention_2' else torch.float32
        
-        decoder_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=dtype,   # or float16
-            low_cpu_mem_usage=False,      # ← IMPORTANT
-            device_map="cpu",              # ← IMPORTANT
-            trust_remote_code=True
+        decoder_model = AutoModelForCausalLM.from_pretrained(  
+            model_name,  
+            torch_dtype=torch.float32,  
+            trust_remote_code=True,  
+            device_map="auto"  
         )
+
+        if torch.cuda.is_available():  
+            decoder_model = decoder_model.to("cuda")
 
         #print(decoder_model)
 
