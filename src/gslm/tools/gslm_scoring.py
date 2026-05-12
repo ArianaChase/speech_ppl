@@ -19,6 +19,8 @@ import time
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
+from operator import itemgetter
+
 start_time = time.time()
 
 log_format = "[%(asctime)s] [%(levelname)s]: %(message)s"
@@ -136,60 +138,74 @@ class GslmSpeechPplWrapper:
             "loss_all_tokens": loss_all_tokens
         }
     
-def create_csv_file(output_dir, model, index): # gslm_001
-    filename = '%s/%s_%s' % (output_dir, model, index)
+def create_csv_file(output_dir, name): # gslm_001
+    filename = '%s/%s' % (output_dir, name)
 
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
+        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
     return filename
 
-def get_directory_losses(dir, csv_name, spk):
+def get_directory_losses(dir, csv_name, spk, labels_list):
 
     root_dir = dir
     output_csv = csv_name
     speaker = spk
 
     pbar = tqdm(sorted(os.listdir(root_dir)))
-    counter = 0
 
     for files in pbar:
-        if counter >= 20:
-            break
+        file_path = os.path.join(root_dir, files)
+        filename = os.path.basename(file_path)[0:9]
 
-        pbar.set_description(f"Getting per token losses for file: {files}")
+        pbar.set_description(f"Getting per token losses for file: {filename}")
 
-        filename = os.path.join(root_dir, files)
-
-        audio, sr = torchaudio.load(filename)
+        audio, sr = torchaudio.load(file_path)
         audio = audio.to(device)
 
         per_token_losses = get_per_token_losses(audio)["loss_all_tokens"]
         per_token_losses_mean = torch.mean(per_token_losses)
 
-        with open(output_csv, mode="a", newline="") as csvfile:
-            fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_token_losses_mean.item()})
+        human_annotation_obj = None
 
-        counter += 1
-        #print("Filename: ", filename)
-        #print("Per token losses (after cross entropy):", per_token_losses[:10], "...", per_token_losses.shape)
-        #print(f"Mean of losses: {torch.mean(per_token_losses)}")
+        for obj in labels_list:
+            if obj["filename"] == filename:
+                human_annotation_obj = obj
 
-def parse_accuracy_scores(filename):
-    accuracy_scores = {}
+                with open(output_csv, mode="a", newline="") as csvfile:
+                    fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow({
+                        "Speaker": speaker, 
+                        "Audio filename": filename, 
+                        "Raw Mean of Per Token Losses": per_token_losses_mean.item(),
+                        "Human Annotation (Accuracy)": human_annotation_obj["accuracy"],
+                        "Human Annotation (Fluency)": human_annotation_obj["fluency"],
+                        "Human Annotation (Prosody)": human_annotation_obj["prosodic"],
+                        "Human Annotation (Completeness)": human_annotation_obj["completeness"],
+                        })
+
+                break
+
+def parse_human_annotations(filename):
+    human_scores = []
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
+            print(audio_file)
             value = data[audio_file]
-            accuracy_scores[os.path.basename(audio_file)] = value["accuracy"]
-
-    return accuracy_scores
+            human_scores.append({
+                "filename" : audio_file,
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"]
+            })
+    return human_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -227,23 +243,13 @@ if __name__ == "__main__":
     
     # get labels to compare to
     score_labels = args.labels_dir
-    accuracy_scores = parse_accuracy_scores(score_labels)
-    accuracy_scores = dict(sorted(accuracy_scores.items()))
-    print(accuracy_scores)
-    y = []
-    for key, value in accuracy_scores.items():
-        print(key[1:5])
-        if key[1:5] != "1076":
-            y.append(value)
-
-    #first = dict(list(accuracy_scores.items())[:100])
-
-    #print(first)
+    human_scores = parse_human_annotations(score_labels)
+    human_scores = sorted(human_scores, key=itemgetter("filename"))
 
     # calculating per token losses
 
     print("Calculating per token losses...")
-    output_csv = create_csv_file(args.output_dir, "gslm", "001")
+    output_csv = create_csv_file(args.output_dir, "gslm_likelihood_accuracy_001")
     input_dataset = args.dataset_dir
     
     pbar = tqdm(sorted(os.listdir(input_dataset)))
@@ -258,27 +264,35 @@ if __name__ == "__main__":
             pbar.set_description(f"Processing speaker: {speaker}")
             dir_path = os.path.join(input_dataset, dirs)
             # get losses for each file in the directory and record in csv
-            get_directory_losses(dir_path, output_csv, speaker)
+            get_directory_losses(dir_path, output_csv, speaker, human_scores)
         counter += 1
 
     # normalization (obsolete)
-    scaler = MinMaxScaler()
     output_csv_df = pd.read_csv(output_csv)
-    losses = output_csv_df["Raw Mean of Per Token Losses"].values
-    losses_reshaped = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
+    x = output_csv_df["Raw Mean of Per Token Losses"].values
 
-    normalized_col = pd.Series(scaler.fit_transform(losses_reshaped).ravel())
-    output_csv_df["Normalized Per Token Losses"] = normalized_col
-
-    output_csv_df.to_csv(output_csv, index=False)
-
-    # correlation
-    x = -np.array(losses)  
-
-    print(f"Sample count: {len(x)}") 
-    print(f"Labels count: {len(y)}") 
-    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}") 
-    print("Speaker count: ", counter) 
+    def calc_correlation(x, dim):
+        if (dim == "accuracy"):
+            y = output_csv_df["Human Annotation (Accuracy)"]
+        elif (dim == "fluency"):
+            y = output_csv_df["Human Annotation (Fluency)"]
+        elif (dim == "prosodic"):
+            y = output_csv_df["Human Annotation (Prosody)"]
+        elif (dim == "completeness"):
+            y = output_csv_df["Human Annotation (Completeness)"]
+        else:
+            print(f"Invalid dimension")
+            return
+        
+        print(f"=== Correlation for dimension {dim} ===")
+        print("Correlation x len: ", len(x))
+        print("Correlation y len: ", len(y))
+        print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+    
+    calc_correlation(x, "accuracy")
+    calc_correlation(x, "fluency")
+    calc_correlation(x, "prosodic")
+    calc_correlation(x, "completeness")
 
     # Capture and format the finish time 
     now = datetime.now() 

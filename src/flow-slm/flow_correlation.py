@@ -5,40 +5,106 @@ import scipy.stats
 from sklearn.preprocessing import MinMaxScaler
 import argparse
 import json
+from operator import itemgetter
+import csv
 
-def calc_correlation(file, labels, mode="combined"):
-    loss_df = pd.read_csv(file)
-    y = labels
+#  def dim_correlation(x, dim):
+#     if (dim == "accuracy"):
+#         y = output_csv_df["Human Annotation (Accuracy)"]
+#     elif (dim == "fluency"):
+#         y = output_csv_df["Human Annotation (Fluency)"]
+#     elif (dim == "prosodic"):
+#         y = output_csv_df["Human Annotation (Prosody)"]
+#     elif (dim == "completeness"):
+#         y = output_csv_df["Human Annotation (Completeness)"]
+#     else:
+#         print(f"Invalid dimension")
+#         return
+    
+#     print(f"=== Correlation for dimension {dim} ===")
+#     print("Correlation x len: ", len(x))
+#     print("Correlation y len: ", len(y))
+#     print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+    
 
-    losses = []
+# def calc_correlation(file, labels, mode="combined"):
+#     loss_df = pd.read_csv(file)
+#     y = labels
 
-    if (mode == "utt_token"):
-        losses = loss_df["utt_token_loss"].astype(float).values
-    elif (mode == "utt_flow"):
-        losses = loss_df["utt_flow_loss"].astype(float).values
-    elif (mode == "combined"):
-        losses = loss_df["weighted_combined_score"].astype(float).values
-    else:
-        print("Mode not valid.")
+#     losses = []
 
-    print(loss_df.head())
-    x = -np.array(losses)
+#     if (mode == "utt_token"):
+#         losses = loss_df["utt_token_loss"].astype(float).values
+#         x = -np.array(losses)
 
-    correlation_value = scipy.stats.pearsonr(x, y)
+#         dim_correlation(losses, "accuracy")
+#         dim_correlation(losses, "fluency")
+#         dim_correlation(losses, "prosodic")
+#         dim_correlation(losses, "completeness")
 
-    return len(x), len(y), correlation_value
+#     elif (mode == "utt_flow"):
+#         losses = loss_df["utt_flow_loss"].astype(float).values
+#         x = -np.array(losses)
+
+#         dim_correlation(losses, "accuracy")
+#         dim_correlation(losses, "fluency")
+#         dim_correlation(losses, "prosodic")
+#         dim_correlation(losses, "completeness")
+#     elif (mode == "combined"):
+#         losses = loss_df["weighted_combined_score"].astype(float).values
+#         x = -np.array(losses)
+
+#         dim_correlation(losses, "accuracy")
+#         dim_correlation(losses, "fluency")
+#         dim_correlation(losses, "prosodic")
+#         dim_correlation(losses, "completeness")
+#     else:
+#         print("Mode not valid.")
 
 
 
-def parse_accuracy_scores(filename):
-    accuracy_scores = {}
+
+def parse_human_annotations(filename):
+    human_scores = []
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
             value = data[audio_file]
-            accuracy_scores[os.path.basename(audio_file)] = value["completeness"]
+            human_scores.append({
+                "filename" : audio_file,
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"]
+            })
+    return human_scores
 
-    return accuracy_scores
+def losses_to_dict(loss_file, labels_list):
+
+    with open(loss_file, mode='r') as file:
+        reader = csv.DictReader(file)
+        data = [row for row in reader]
+
+    loss_objects = []
+    
+
+    for loss_obj in data:
+        filename = loss_obj["id"][12:]
+        speaker = loss_obj["id"][7:11]
+
+
+        if (any(filename == x["filename"] for x in labels_list)):    
+            loss_objects.append({
+                "filename" : filename,
+                "raw_token_losses" : loss_obj['raw_token_losses'],
+                "raw_flow_losses" : loss_obj['raw_flow_losses'],
+                "utt_token_loss" : loss_obj['utt_token_loss'],
+                "utt_flow_loss" : loss_obj['utt_flow_loss']
+            })
+    
+    print("Length of list: ", len(loss_objects))
+    print("Length of labels: ", len(labels_list))
+
 
 
 if __name__ == "__main__":
@@ -54,22 +120,10 @@ if __name__ == "__main__":
 
     # get labels to compare to
     score_labels = args.labels_dir
-    accuracy_scores = parse_accuracy_scores(score_labels)
-    accuracy_scores = dict(sorted(accuracy_scores.items()))
-    y = []
-    for key, value in accuracy_scores.items():
-        if key[1:5] != "1076":
-            y.append(value)
+    human_scores = parse_human_annotations(score_labels)
+    human_scores = sorted(human_scores, key=itemgetter("filename"))
 
-    utt_token_correlation = calc_correlation(loss_file, y, "utt_token")
-    utt_flow_correlation = calc_correlation(loss_file, y, "utt_flow")
-    combined_correlation = calc_correlation(loss_file, y, "combined")
-
-    print(f"Sample count: {utt_flow_correlation[0]}") 
-    print(f"Labels count: {utt_flow_correlation[1]}") 
-    print(f"Correlation value for utterance-level literary tokens is: {utt_token_correlation[2]}") 
-    print(f"Correlation value for utterance-level acoustic tokens is: {utt_flow_correlation[2]}")
-    print(f"Weighted and combined correlation value is: {combined_correlation[2]}")
+    losses_to_dict(loss_file, human_scores)
 
 
 

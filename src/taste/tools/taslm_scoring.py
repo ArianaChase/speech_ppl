@@ -14,6 +14,8 @@ import scipy.stats
 import time
 from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
+from datetime import datetime
+from operator import itemgetter
 
 import os
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -39,7 +41,8 @@ class TaslmSpeechPPLWrapper:
             attn_implementation=attn_implementation,
         )
         #self.model = self.model.to(torch.float32)
-        self.model = self.model.to(self.device)
+        self.model = self.model.to(device=self.device, dtype=torch.bfloat16)
+
         self.model.eval()
         self.processor = TasteProcessor.from_pretrained(
             pretrained_model_dir
@@ -105,6 +108,11 @@ class TaslmSpeechPPLWrapper:
     ) -> torch.Tensor:
         raw_audio, sr = self.get_audio_sample_and_sr(audio_sample)
         # process audio
+
+        # If spk_embed is provided externally, ensure it is bf16
+        if spk_embed is not None and torch.is_floating_point(spk_embed):
+            spk_embed = spk_embed.to(device=self.device, dtype=torch.bfloat16)
+
         inputs = self.processor(
             audio=raw_audio,
             sampling_rate=sr,
@@ -113,7 +121,15 @@ class TaslmSpeechPPLWrapper:
             output_text_info=True,
             speaker_embed=spk_embed,
         )
-        inputs = inputs.to(device=self.device)
+
+        # Move to device and cast ONLY floating point tensors to bfloat16
+        for k, v in inputs.items():
+            if isinstance(v, torch.Tensor):
+                if torch.is_floating_point(v):
+                    inputs[k] = v.to(device=self.device, dtype=torch.bfloat16)
+                else:
+                    inputs[k] = v.to(device=self.device) # Keep IDs as Integers/Long
+
         asr_indices, llm_indices = self.model.extract_vq(
             asr_token_ids=inputs["asr_token_ids"],
             asr_token_lengths=inputs["asr_token_lengths"],
@@ -144,65 +160,83 @@ class TaslmSpeechPPLWrapper:
         #         print(f"  shape: {val.shape}")
         # print(f"mse_loss shape: {mse_loss.shape}")
         # print(mse_loss)
-        mse_loss_by_words = mse_loss.mean(dim=-1).cpu().numpy()
+        mse_loss_by_words = mse_loss.mean(dim=-1).to(torch.float32).cpu().numpy()
+
         # print(f"mse_loss_by_words: {mse_loss_by_words}, len: {len(mse_loss_by_words)}")
         # words = inputs["words"][0]
         # print("words:", words,  len(words))
         return mse_loss_by_words
 
-def create_csv_file(output_dir, model, index): # gslm_001
-    filename = '%s/%s_%s' % (output_dir, model, index)
+def create_csv_file(output_dir, name): # gslm_001
+    filename = '%s/%s' % (output_dir, name)
 
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
+        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
     return filename
 
-def get_directory_losses(dir, csv_name, spk):
+def get_directory_losses(dir, csv_name, spk, labels_list):
 
     root_dir = dir
     output_csv = csv_name
     speaker = spk
 
     pbar = tqdm(sorted(os.listdir(root_dir)))
-    counter = 0
 
     for files in pbar:
-        if counter >= 20:
-            break
+        file_path = os.path.join(root_dir, files)
+        filename = os.path.basename(file_path)[0:9]
+
         pbar.set_description(f"Getting per token losses for file: {files}")
 
-        filename = os.path.join(root_dir, files)
-
-        audio, sr = librosa.load(filename, sr=TASLM_INPUT_SAMPLING_RATE)
+        audio, sr = librosa.load(file_path, sr=TASLM_INPUT_SAMPLING_RATE)
 
         per_word_losses = taslm_model.get_per_word_losses(
                 audio_sample={"array": audio, "sampling_rate": sr}
             )
-        
-        
         per_token_losses_tensor = torch.from_numpy(per_word_losses)
         per_word_losses_mean = torch.mean(per_token_losses_tensor)
-        with open(output_csv, mode="a", newline="") as csvfile:
-            fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Normalized Per Token Losses"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writerow({"Speaker": speaker, "Audio filename": os.path.basename(filename), "Raw Mean of Per Token Losses": per_word_losses_mean.item()})
-        
-        counter += 1
 
-def parse_accuracy_scores(filename):
-    accuracy_scores = {}
+        human_annotation_obj = None
+
+        for obj in labels_list:
+            if obj["filename"] == filename:
+                human_annotation_obj = obj
+
+                with open(output_csv, mode="a", newline="") as csvfile:
+                    fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow({
+                        "Speaker": speaker, 
+                        "Audio filename": filename, 
+                        "Raw Mean of Per Token Losses": per_word_losses_mean.item(),
+                        "Human Annotation (Accuracy)": human_annotation_obj["accuracy"],
+                        "Human Annotation (Fluency)": human_annotation_obj["fluency"],
+                        "Human Annotation (Prosody)": human_annotation_obj["prosodic"],
+                        "Human Annotation (Completeness)": human_annotation_obj["completeness"],
+                        })
+
+                break
+        
+
+def parse_human_annotations(filename):
+    human_scores = []
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
             value = data[audio_file]
-            accuracy_scores[os.path.basename(audio_file)] = value["accuracy"]
-
-    return accuracy_scores
+            human_scores.append({
+                "filename" : audio_file,
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"]
+            })
+    return human_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -238,6 +272,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--labels_dir", type=str, required=True)
     parser.add_argument("--dataset_dir", type=str, required=True)
+    parser.add_argument("--name", type=str, required=True)
+
 
     args = parser.parse_args()
     seed_everything(args.seed)
@@ -258,62 +294,63 @@ if __name__ == "__main__":
     print(f"Device: {device}")
 
     # get labels to compare to
-    print("Getting labels...")
-
     score_labels = args.labels_dir
-    accuracy_scores = parse_accuracy_scores(score_labels)
-    accuracy_scores = dict(sorted(accuracy_scores.items()))
-    y = []
-    for key, value in accuracy_scores.items():
-        print(key[1:5])
-        if key[1:5] != "1076":
-            y.append(value)
+    human_scores = parse_human_annotations(score_labels)
+    human_scores = sorted(human_scores, key=itemgetter("filename"))
 
     # calculating per word losses
     print("Calculating per word losses...")
-    output_csv = create_csv_file(args.output_dir, "taste", "001")
+    output_csv = create_csv_file(args.output_dir, "taste_likelihood_001")
     input_dataset = args.dataset_dir
     
     pbar = tqdm(sorted(os.listdir(input_dataset)))
     print(pbar)
 
-    # loop through all directories of the dataset
     counter = 0
+
+    # loop through all directories of the dataset
     for dirs in pbar:
-        #if counter >= 5:
+        #if counter >= 2:
         #    break
         speaker = dirs[7:None]
         if int(speaker) != 1076:
             pbar.set_description(f"Processing speaker: {speaker}")
             dir_path = os.path.join(input_dataset, dirs)
             # get losses for each file in the directory and record in csv
-            get_directory_losses(dir_path, output_csv, speaker)
+            get_directory_losses(dir_path, output_csv, speaker, human_scores)
         else:
             pass
         #counter += 1
 
-    # normalization (obsolete)
-    scaler = MinMaxScaler()
+
     output_csv_df = pd.read_csv(output_csv)
-    losses = output_csv_df["Raw Mean of Per Token Losses"].values
-    losses_reshaped = output_csv_df["Raw Mean of Per Token Losses"].values.reshape(-1,1)
+    x = output_csv_df["Raw Mean of Per Token Losses"].values
 
-    normalized_col = pd.Series(scaler.fit_transform(losses_reshaped).ravel())
-    output_csv_df["Normalized Per Token Losses"] = normalized_col
+    def calc_correlation(x, dim):
+        if (dim == "accuracy"):
+            y = output_csv_df["Human Annotation (Accuracy)"]
+        elif (dim == "fluency"):
+            y = output_csv_df["Human Annotation (Fluency)"]
+        elif (dim == "prosodic"):
+            y = output_csv_df["Human Annotation (Prosody)"]
+        elif (dim == "completeness"):
+            y = output_csv_df["Human Annotation (Completeness)"]
+        else:
+            print(f"Invalid dimension")
+            return
+        
+        print(f"=== Correlation for dimension {dim} ===")
+        print("Correlation x len: ", len(x))
+        print("Correlation y len: ", len(y))
+        print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+    
+    calc_correlation(x, "accuracy")
+    calc_correlation(x, "fluency")
+    calc_correlation(x, "prosodic")
+    calc_correlation(x, "completeness")
 
-    output_csv_df.to_csv(output_csv, index=False)
-
-    # get labels to compare to
-    score_labels = args.labels_dir
-    accuracy_scores = parse_accuracy_scores(score_labels)
-
-    # correlation
-    x = losses
-    print(len(x))
-    print(len(y))
-    #print(x)
-    #print(y)
-    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
-
-    print(f"Program finished executing in {time.time() - start_time} seconds.")
-
+    # Capture and format the finish time 
+    now = datetime.now() 
+    finish_time = now.strftime("%m-%d-%Y %H:%M") 
+    print(f"Date and time at completion: {finish_time}") 
+    print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")

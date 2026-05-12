@@ -1,13 +1,14 @@
 set -e 
 
 echo "Activating virtual environment..."
-root_dir=~/speech_ppl
+root_dir=/home/u5504709/new_work/speech_ppl
 cd $root_dir
 source $root_dir/venv/twist/.venv/bin/activate
 
 twist_pretrained_model_dir=$root_dir/work/pretrained_models/twist/TWIST-1.3B
 data_sample_dir=$root_dir/work/data/samples
 twist_output_dir=$root_dir/work/outputs/twist
+name="twist_scoring"
 
 mkdir -p $twist_output_dir
 export CUDA_VISIBLE_DEVICES=0
@@ -18,6 +19,7 @@ echo $SETUPTOOLS_USE_DISTUTILS
 
 echo "Running twist_scoring..."
 python $root_dir/src/twist/tools/twist_scoring.py \
+	--name $name \
     --language_model_dir $twist_pretrained_model_dir \
 	--dataset_dir $root_dir/speechocean762/WAVE \
 	--output_dir $root_dir/work/outputs/twist/ \

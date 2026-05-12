@@ -1,5 +1,5 @@
 # custom dirs
-work
+work/
 /home/u5504709/new_work/speech_ppl/work/data
 /home/u5504709/new_work/speech_ppl/work/pretrained_models
 transformers
@@ -9,6 +9,10 @@ tmp*.*
 fairseq
 /home/u5504709/new_work/speech_ppl/work/outputs/textgrids
 # egs/taste/emilia_libritts
+core.*
+/home/u5504709/new_work/speech_ppl/core.95949
+/home/u5504709/new_work/speech_ppl/core.97094
+/home/u5504709/new_work/speech_ppl/core.241399
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

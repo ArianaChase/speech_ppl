@@ -1,7 +1,7 @@
 set -e 
 
 echo "Activating virtual environment..."
-root_dir=~/speech_ppl
+root_dir=~/new_work/speech_ppl
 cd $root_dir
 source $root_dir/venv/taste/.venv/bin/activate
 
@@ -13,10 +13,13 @@ mkdir -p $taslm_output_dir
 export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
+name="taslm_scoring"
+
 nvidia-smi
 
 echo "Running TASTE scoring..."
 python $root_dir/src/taste/tools/taslm_scoring.py \
+	--name $name \
     --pretrained_model_dir $pretrained_model_dir \
     --testing_audio_fpath $data_sample_dir/speech.wav \
     --output_dir $taslm_output_dir \

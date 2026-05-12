@@ -20,16 +20,22 @@ from datasets import Dataset
 from torch.utils.data import DataLoader  
 import torch.multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
+from operator import itemgetter
 
-def parse_accuracy_scores(filename):
-    accuracy_scores = {}
+def parse_human_annotations(filename):
+    human_scores = []
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
             value = data[audio_file]
-            accuracy_scores[os.path.basename(audio_file)] = value["accuracy"]
-
-    return accuracy_scores
+            human_scores.append({
+                "filename" : os.path.basename(audio_file),
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"]
+            })
+    return human_scores
 
 def create_csv_file(output_dir, name):
     filename = '%s/%s' % (output_dir, name)
@@ -37,7 +43,7 @@ def create_csv_file(output_dir, name):
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation"]
+        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
@@ -69,9 +75,8 @@ def pad_seq_collate_fn(batch):
         
     return padded
 
-def process_audio_item(item):
-    print(f"Processing {item['filename']}...")
-    
+def process_audio_item(item):    
+    tqdm.write(f"  [CPU] Extracting: {item['filename']}")
     # This uses the 'processor' defined in your main script
 
     inputs = processor(
@@ -100,7 +105,7 @@ def process_audio_item(item):
 
     return padded_batch
 
-def getWAVfiles(input_dataset, amt):
+def getWAVfiles(input_dataset, amt, labels_list):
 
     audio_paths = []
 
@@ -112,14 +117,21 @@ def getWAVfiles(input_dataset, amt):
         if (counter >= amt):
             break
         speaker = dir[7:None]
-        speakerWAV.set_description(f"Appending speaker: {speaker}")
-        speakerWAV_path = os.path.join(input_dataset, dir)
-        for file in os.listdir(speakerWAV_path):
-            audio_paths.append({
-                "path" : os.path.join(input_dataset, dir, file),
-                "speaker" : speaker,
-                "filename" : file[0:9]
-            })
+
+        if (speaker != "1076"):
+            speakerWAV.set_description(f"Appending speaker: {speaker}")
+            speakerWAV_path = os.path.join(input_dataset, dir)
+            for file in os.listdir(speakerWAV_path):
+                file_info = {
+                    "path" : os.path.join(input_dataset, dir, file),
+                    "speaker" : speaker,
+                    "filename" : file[0:9]
+                }
+
+                if (any(file_info["filename"] == x["filename"] for x in labels_list)):
+                    audio_paths.append(file_info)
+                
+        
         counter += 1
 
     return audio_paths  
@@ -158,23 +170,31 @@ start_time = time.time()
 
 if __name__ == "__main__":
     mp.set_start_method('spawn', force=True) 
-    # =================1. Preparing initial data
 
-    input_dataset = "/home/u5504709/new_work/speech_ppl/speechocean762/WAVE/"
-    score_labels = "/home/u5504709/new_work/speech_ppl/speechocean762/resource/scores.json"
-    data_size = 1
-    audio_info = getWAVfiles(input_dataset, data_size) # returns a list of dictionaries in the format of {"path" : path to audio file}
-    print("Saved ", len(audio_info), " audio files from input dataset.")
-    print(audio_info)
-    output_csv = create_csv_file("/home/u5504709/new_work/speech_ppl/work/outputs", "taslm_reconstruction_001")
+    # ================= 1. Preparing initial data
 
     # -- Saving human annotated scores --
-    accuracy_scores = parse_accuracy_scores(score_labels)
-    accuracy_scores = dict(sorted(accuracy_scores.items()))
-    human_annotations_values = []
+    score_labels = "/home/u5504709/new_work/speech_ppl/speechocean762/resource/scores.json"
+    human_scores = parse_human_annotations(score_labels)
+    human_scores = sorted(human_scores, key=itemgetter("filename"))
+    #print(human_scores)
 
-    for key, value in accuracy_scores.items():
-        human_annotations_values.append(value)
+    input_dataset = "/home/u5504709/new_work/speech_ppl/speechocean762/WAVE/"
+    data_size = 250
+    audio_info = getWAVfiles(input_dataset, data_size, human_scores) # returns a list of dictionaries in the format of {"path" : path to audio file}
+    print("Saved ", len(audio_info), " audio files from input dataset.")
+    #print(audio_info[0:100])
+    audio_data_size = len(audio_info)
+    output_csv = create_csv_file("/home/u5504709/new_work/speech_ppl/work/outputs", "taslm_reconstruction_001")
+
+    
+    # Checking
+
+    for thing in audio_info:
+        if (not any(thing["filename"] == x["filename"] for x in human_scores)):
+            print(f"FILE {thing['filename']} NOT FOUND IN HUMAN ANNOTATED SCORES")
+    
+    print("EXISTENCE CHECK FINISHED.")
 
     # ===================== 2. Loading model
 
@@ -211,20 +231,21 @@ if __name__ == "__main__":
 
     # ============== 3. Create Dataset and DataLoader  
 
-    batch_size = 32
     cols = ['speaker_embeds', 'audio_features', 'audio_feature_lengths',  
             'asr_token_ids', 'asr_token_lengths', 'asr_word_ids',  
             'llm_token_ids', 'llm_token_lengths', 'llm_word_ids']  
 
     results_to_write = []
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
 
         batch_idx = 0
 
-        for batch in tqdm(executor.map(process_audio_item, audio_info), total=len(audio_info)):
+        pbar = tqdm(executor.map(process_audio_item, audio_info), total=len(audio_info), desc="Reconstructing Audio")
 
-            print("Batch inferencing, iteration: ", batch_idx)
+        for batch in pbar:
+
+            tqdm.write(f"  [GPU] Reconstructing: {batch['filename']}")
             if batch is None: # Skip files that failed filtering
                 batch_idx += 1
                 continue
@@ -242,52 +263,75 @@ if __name__ == "__main__":
 
             # Run inference without gradient computation (saves memory)  
             with torch.no_grad():  
-                batch = {k: batch[k] for k in cols if k in batch}
+                inference_batch = {k: batch[k] for k in cols if k in batch}
 
                 # Reconstruct speech tokens from audio features  
-                output = model.inference_reconstruction(**batch)  
+                output = model.inference_reconstruction(**inference_batch)  
                 
                 # Generate actual audio waveform from speech tokens  
                 tts_speech, tts_sr = generator.inference(  
                     speech_token_ids=output['speech_token_ids'],         # Generated speech tokens  
                     speech_token_lengths=output['speech_token_lengths'], # Token sequence lengths  
-                    flow_embedding=batch['speaker_embeds']               # Speaker characteristics  
+                    flow_embedding=inference_batch['speaker_embeds']               # Speaker characteristics  
                 ) 
                 tts_speech = tts_speech.to(torch.float32).to(device)
-
-                print(f" Scoring index: { batch_idx }, speaker is { audio_info[ batch_idx ]['speaker'] }")
                 
-                original_info = audio_info[batch_idx]
+                original_info = batch
                 recon_info = {
                     "tensor" : tts_speech,
                     "sr" : tts_sr
                 }
 
                 score = get_MSE(original_info, recon_info)
+                pbar.set_postfix({"index": batch_idx, "speaker": batch["speaker"], "file": batch["filename"], "MSE": f"{score:.4f}"})
 
+                for obj in human_scores:
+                    if obj["filename"] == original_info["filename"]:
+                        human_annotation_obj = obj
+                
                 results_to_write.append({
                     "Speaker": original_info["speaker"], 
                     "Audio filename": original_info["filename"], 
                     "Raw MSE": score, 
-                    "Human Annotation": accuracy_scores[original_info["filename"]]
+                    "Human Annotation (Accuracy)" : human_annotation_obj["accuracy"],
+                    "Human Annotation (Fluency)" : human_annotation_obj["fluency"],
+                    "Human Annotation (Prosody)" : human_annotation_obj["prosodic"],
+                    "Human Annotation (Completeness)" : human_annotation_obj["completeness"],
                     })
                     
             print(f"Finished processing batch {batch_idx}!")
             batch_idx += 1
 
     with open(output_csv, mode="a", newline="") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation"]
+        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerows(results_to_write)
 
     output_csv_df = pd.read_csv(output_csv)
     x = output_csv_df["Raw MSE"].values
-    y = human_annotations_values[0:data_size*20]
 
-    print("Correlation x len: ", len(x))
-    print("Correlation y len: ", len(y))
+    def calc_correlation(x, dim):
+        if (dim == "accuracy"):
+            y = output_csv_df["Human Annotation (Accuracy)"]
+        elif (dim == "fluency"):
+            y = output_csv_df["Human Annotation (Fluency)"]
+        elif (dim == "prosodic"):
+            y = output_csv_df["Human Annotation (Prosody)"]
+        elif (dim == "completeness"):
+            y = output_csv_df["Human Annotation (Completeness)"]
+        else:
+            print(f"Invalid dimension")
+            return
         
-    print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+        print(f"=== Correlation for dimension {dim} ===")
+        print("Correlation x len: ", len(x))
+        print("Correlation y len: ", len(y))
+        print(f"Correlation value is: {scipy.stats.pearsonr(x, y)}")
+    
+    calc_correlation(x, "accuracy")
+    calc_correlation(x, "fluency")
+    calc_correlation(x, "prosodic")
+    calc_correlation(x, "completeness")
 
     now = datetime.now() 
     finish_time = now.strftime("%m-%d-%Y %H:%M") 
