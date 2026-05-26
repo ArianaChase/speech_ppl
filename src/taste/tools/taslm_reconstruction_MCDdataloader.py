@@ -43,7 +43,7 @@ def create_csv_file(output_dir, name):
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
+        fieldnames = ["Speaker", "Audio filename", "original_path", "recon_path", "Raw MSE", "Raw MCD", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
@@ -166,12 +166,55 @@ def get_MSE(original, recon):
     score = torch.nn.functional.mse_loss(orig_mel_db, recon_mel_db)
     return score.item()
 
+def get_MCD(original, recon):
+    """
+    Calculates Mel-Cepstral Distortion between original and reconstructed audio.
+    """
+    # 1. Load original and move to GPU
+    orig_wav, orig_sr = torchaudio.load(original["path"])
+    orig_wav = orig_wav.to(device)
+    
+    # 2. Fast resampling
+    if orig_sr != recon["sr"]:
+        orig_wav = torchaudio.functional.resample(orig_wav, orig_sr, recon["sr"])
+        
+    # 3. Calculate MFCCs entirely on GPU
+    # mfcc_transform is defined in the main block
+    orig_mfcc = mfcc_transform(orig_wav)     # Shape: [1, n_mfcc, frames]
+    recon_mfcc = mfcc_transform(recon["tensor"])
+    
+    # 4. Discard the 0th coefficient (Energy/Gain) as is standard for MCD
+    orig_mfcc = orig_mfcc[:, 1:, :]
+    recon_mfcc = recon_mfcc[:, 1:, :]
+
+    # 5. Trim to match lengths in the time dimension
+    min_len = min(orig_mfcc.shape[-1], recon_mfcc.shape[-1])
+    orig_mfcc = orig_mfcc[..., :min_len]
+    recon_mfcc = recon_mfcc[..., :min_len]
+
+    # 6. Calculate MCD formula: (10/ln10) * sqrt( 2 * sum( (c1-c2)^2 ) )
+    # Difference squared
+    diff = orig_mfcc - recon_mfcc
+    # Sum over the MFCC coefficients (dim 1)
+    squared_diff_sum = torch.sum(diff**2, dim=1) 
+    # Take sqrt and multiply by the MCD constant
+    mcd_constant = 10.0 / np.log(10.0)
+    distance = mcd_constant * torch.sqrt(2.0 * squared_diff_sum)
+    
+    # Average across all frames
+    avg_mcd = torch.mean(distance)
+    
+    return avg_mcd.item()
+
 start_time = time.time()
 
 if __name__ == "__main__":
     mp.set_start_method('spawn', force=True) 
 
     # ================= 1. Preparing initial data
+
+    output_audio_dir = "/home/u5504709/new_work/speech_ppl/work/reconstructed_audio"
+    os.makedirs(output_audio_dir, exist_ok=True)
 
     # -- Saving human annotated scores --
     score_labels = "/home/u5504709/new_work/speech_ppl/speechocean762/resource/scores.json"
@@ -180,14 +223,16 @@ if __name__ == "__main__":
     #print(human_scores)
 
     input_dataset = "/home/u5504709/new_work/speech_ppl/speechocean762/WAVE/"
-    data_size = 2
+    data_size = 250
     audio_info = getWAVfiles(input_dataset, data_size, human_scores) # returns a list of dictionaries in the format of {"path" : path to audio file}
     print("Saved ", len(audio_info), " audio files from input dataset.")
     #print(audio_info[0:100])
     audio_data_size = len(audio_info)
     output_csv = create_csv_file("/home/u5504709/new_work/speech_ppl/work/outputs", "taslm_reconstruction_001")
+
     
     # Checking
+
     for thing in audio_info:
         if (not any(thing["filename"] == x["filename"] for x in human_scores)):
             print(f"FILE {thing['filename']} NOT FOUND IN HUMAN ANNOTATED SCORES")
@@ -225,6 +270,17 @@ if __name__ == "__main__":
         hop_length=256, 
         n_mels=80,
         power=2.0 # Librosa default is power=2.0
+    ).to(device)
+
+    mfcc_transform = torchaudio.transforms.MFCC(
+        sample_rate=16000,
+        n_mfcc=13,
+        melkwargs={
+            "n_fft": 1024,
+            "hop_length": 256,
+            "n_mels": 80,
+            "center": True
+        }
     ).to(device)
 
     # ============== 3. Create Dataset and DataLoader  
@@ -272,16 +328,23 @@ if __name__ == "__main__":
                     speech_token_lengths=output['speech_token_lengths'], # Token sequence lengths  
                     flow_embedding=inference_batch['speaker_embeds']               # Speaker characteristics  
                 ) 
+
                 tts_speech = tts_speech.to(torch.float32).to(device)
-                
+
                 original_info = batch
                 recon_info = {
                     "tensor" : tts_speech,
                     "sr" : tts_sr
                 }
 
-                score = get_MSE(original_info, recon_info)
-                pbar.set_postfix({"index": batch_idx, "speaker": batch["speaker"], "file": batch["filename"], "MSE": f"{score:.4f}"})
+                recon_filename = f"{original_info['filename']}_recon.wav"
+                recon_path = os.path.join(output_audio_dir, recon_filename)
+
+                torchaudio.save(recon_path, tts_speech.cpu(), tts_sr)
+
+                score_mse = get_MSE(original_info, recon_info)
+                score_mcd = get_MCD(original_info, recon_info)
+                pbar.set_postfix({"index": batch_idx, "speaker": batch["speaker"], "file": batch["filename"]})
 
                 for obj in human_scores:
                     if obj["filename"] == original_info["filename"]:
@@ -290,7 +353,10 @@ if __name__ == "__main__":
                 results_to_write.append({
                     "Speaker": original_info["speaker"], 
                     "Audio filename": original_info["filename"], 
-                    "Raw MSE": score, 
+                    "original_path" : original_info["path"],
+                    "recon_path" : recon_path,
+                    "Raw MSE": score_mse,
+                    "Raw MCD": score_mcd, 
                     "Human Annotation (Accuracy)" : human_annotation_obj["accuracy"],
                     "Human Annotation (Fluency)" : human_annotation_obj["fluency"],
                     "Human Annotation (Prosody)" : human_annotation_obj["prosodic"],
@@ -301,7 +367,7 @@ if __name__ == "__main__":
             batch_idx += 1
 
     with open(output_csv, mode="a", newline="") as csvfile:
-        fieldnames = ["Speaker", "Audio filename", "Raw MSE", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
+        fieldnames = ["Speaker", "Audio filename", "original_path", "recon_path", "Raw MSE", "Raw MCD", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writerows(results_to_write)
 

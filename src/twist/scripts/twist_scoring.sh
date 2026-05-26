@@ -5,7 +5,7 @@ root_dir=/home/u5504709/new_work/speech_ppl
 cd $root_dir
 source $root_dir/venv/twist/.venv/bin/activate
 
-twist_pretrained_model_dir=$root_dir/work/pretrained_models/twist/TWIST-1.3B
+twist_pretrained_model_dir=$root_dir/work/pretrained_models/twist/TWIST-7B
 data_sample_dir=$root_dir/work/data/samples
 twist_output_dir=$root_dir/work/outputs/twist
 name="twist_scoring"

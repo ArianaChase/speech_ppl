@@ -21,7 +21,7 @@ from operator import itemgetter
 
 start_time = time.time()
 
-MODEL_NAME="TWIST1.3B"
+MODEL_NAME="TWIST7B"
 
 class TwistSpeechPPLWrapper:
     def __init__(
@@ -201,13 +201,13 @@ if __name__ == "__main__":
     output_csv = create_csv_file(args.output_dir, "twist_likelihood_001")
     input_dataset = args.dataset_dir
 
-    pbar = tqdm(os.listdir(input_dataset))
+    pbar = tqdm(sorted(os.listdir(input_dataset)))
 
     # loop through all directories of the dataset
-    counter = 0
+    #counter = 0
     for dirs in pbar:
-        #if counter >= 5:
-        #    break
+        # if counter >= 5:
+        #     break
         speaker = dirs[7:None]
        
         if int(speaker) != 1076:
