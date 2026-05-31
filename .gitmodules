@@ -4,8 +4,8 @@
 [submodule "TASTE-SpokenLM"]
 	path = TASTE-SpokenLM
 	url = git@github.com:andybi7676/TASTE-SpokenLM.git
-[submodule "src/flow-slm"]
-	path = src/flow-slm
+[submodule "flow-slm"]
+	path = flow-slm
 	url = https://github.com/jjery2243542/flow-slm
 [submodule "moshi"]
 	path = moshi
