@@ -22,7 +22,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 start_time = time.time()
 
-MODEL_NAME="TWIST-350M"
+MODEL_NAME="TWIST-1.3B"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -192,16 +192,16 @@ def parse_human_annotations(filename):
         for audio_file in data:
             print(audio_file)
             value = data[audio_file]
-            
-            unique_speakers.add(audio_file[1:5])
+            if value["age"] >= 18:
+                unique_speakers.add(audio_file[1:5])
 
-            human_scores.append({
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"]
-            })
+                human_scores.append({
+                    "filename" : audio_file,
+                    "accuracy" : value["accuracy"],
+                    "fluency" : value["fluency"],
+                    "prosodic" : value["prosodic"],
+                    "completeness" : value["completeness"]
+                })
     return human_scores, unique_speakers
 
 if __name__ == "__main__":

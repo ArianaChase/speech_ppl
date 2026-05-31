@@ -205,13 +205,14 @@ def parse_human_annotations(filename):
         for audio_file in data:
             print(audio_file)
             value = data[audio_file]
-            human_scores.append({
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"]
-            })
+            if value["gender"] == "m":
+                human_scores.append({
+                    "filename" : audio_file,
+                    "accuracy" : value["accuracy"],
+                    "fluency" : value["fluency"],
+                    "prosodic" : value["prosodic"],
+                    "completeness" : value["completeness"]
+                })
     return human_scores
 
 def append_to_sheet(
@@ -280,6 +281,7 @@ if __name__ == "__main__":
     score_labels = args.labels_dir
     human_scores = parse_human_annotations(score_labels)
     human_scores = sorted(human_scores, key=itemgetter("filename"))
+    print(f"Length of human scores: {len(human_scores)}")
 
     # calculating per token losses
 

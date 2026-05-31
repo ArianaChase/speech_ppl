@@ -165,6 +165,8 @@ def get_directory_losses(dir, csv_name, spk, labels_list):
 
     pbar = tqdm(sorted(os.listdir(root_dir)))
 
+    count = 0
+
     for files in pbar:
         file_path = os.path.join(root_dir, files)
         filename = os.path.basename(file_path)[0:9]
@@ -195,24 +197,32 @@ def get_directory_losses(dir, csv_name, spk, labels_list):
                         "Human Annotation (Prosody)": human_annotation_obj["prosodic"],
                         "Human Annotation (Completeness)": human_annotation_obj["completeness"],
                         })
+                
+                count += 1
 
                 break
+    return count
 
 def parse_human_annotations(filename):
     human_scores = []
+    unique_speakers = set()
+
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
             print(audio_file)
             value = data[audio_file]
-            human_scores.append({
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"]
-            })
-    return human_scores
+            if value["age"] < 18:
+                unique_speakers.add(audio_file[1:5])
+
+                human_scores.append({
+                    "filename" : audio_file,
+                    "accuracy" : value["accuracy"],
+                    "fluency" : value["fluency"],
+                    "prosodic" : value["prosodic"],
+                    "completeness" : value["completeness"]
+                })
+    return human_scores, unique_speakers
 
 def append_to_sheet(
     row_data,
@@ -278,8 +288,9 @@ if __name__ == "__main__":
     
     # get labels to compare to
     score_labels = args.labels_dir
-    human_scores = parse_human_annotations(score_labels)
-    human_scores = sorted(human_scores, key=itemgetter("filename"))
+    human_scores,unique_speakers = parse_human_annotations(score_labels)
+    human_scores  = sorted(human_scores, key=itemgetter("filename"))
+    print(f"Length of human scores: {len(human_scores)}")
 
     # calculating per token losses
 
@@ -289,18 +300,19 @@ if __name__ == "__main__":
     
     pbar = tqdm(sorted(os.listdir(input_dataset)))
 
-    # loop through all directories of the dataset
-    counter = 0
+    sample_count = 0
+
     for dirs in pbar:
-        #if counter >= 5:
-        #   break
+        # if counter >= 5:
+        #     break
         speaker = dirs[7:None]
+       
         if int(speaker) != 1076:
             pbar.set_description(f"Processing speaker: {speaker}")
             dir_path = os.path.join(input_dataset, dirs)
             # get losses for each file in the directory and record in csv
-            get_directory_losses(dir_path, output_csv, speaker, human_scores)
-        counter += 1
+            sample_count += get_directory_losses(dir_path, output_csv, speaker, human_scores)
+        #counter += 1
 
     # normalization (obsolete)
     output_csv_df = pd.read_csv(output_csv)
@@ -333,6 +345,7 @@ if __name__ == "__main__":
     prosody_result = calc_correlation(x, "prosodic")
     completeness_result = calc_correlation(x, "completeness")
 
+    speaker_count = len(unique_speakers)
 
     # Capture and format the finish time 
     now = datetime.now() 
@@ -341,7 +354,7 @@ if __name__ == "__main__":
     duration = time.time() - start_time
     print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")
 
-    append_to_sheet(["Accuracy-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, accuracy_result.statistic, accuracy_result.pvalue, duration])
-    append_to_sheet(["Fluency-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, fluency_result.statistic, fluency_result.pvalue, duration])
-    append_to_sheet(["Prosody-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, prosody_result.statistic, prosody_result.pvalue, duration])
-    append_to_sheet(["Completeness-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, completeness_result.statistic, completeness_result.pvalue, duration])
+    append_to_sheet(["Accuracy-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, speaker_count, sample_count, accuracy_result.statistic, accuracy_result.pvalue, duration])
+    append_to_sheet(["Fluency-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, speaker_count, sample_count, fluency_result.statistic, fluency_result.pvalue, duration])
+    append_to_sheet(["Prosody-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, speaker_count, sample_count, prosody_result.statistic, prosody_result.pvalue, duration])
+    append_to_sheet(["Completeness-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, speaker_count, sample_count, completeness_result.statistic, completeness_result.pvalue, duration])
