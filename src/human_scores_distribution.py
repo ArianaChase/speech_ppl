@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # PART 1: Load JSON from File & Parse
 # ==========================================
 
-json_file_path = 'data.json' # Replace with your actual file path
+json_file_path = '/home/u5504709/new_work/speech_ppl/src/scores_enhanced.json' # Replace with your actual file path
 
 with open(json_file_path, 'r', encoding='utf-8') as file:
     data = json.load(file)
@@ -25,16 +25,12 @@ df = df[cols_to_keep]
 bins = [-1, 2, 4, 6, 8, 10]
 labels = ['0-2', '3-4', '5-6', '7-8', '9-10']
 dimensions = ['accuracy', 'completeness', 'fluency', 'prosodic']
-
-# A modern, pretty color gradient for the 5 score brackets (Red -> Orange -> Yellow -> Teal -> Dark Blue)
 pretty_colors = ['#e63946', '#f4a261', '#e9c46a', '#2a9d8f', '#264653']
 
-groups = {
-    'Female': df[df['gender'].str.lower() == 'f'],
-    'Male': df[df['gender'].str.lower() == 'm'],
-    '18+': df[df['age'] >= 18],
-    '18-': df[df['age'] < 18]
-}
+# Group Definitions
+groups_all =    {'All Samples': df}
+groups_gender = {'Female': df[df['gender'].str.lower() == 'f'], 'Male': df[df['gender'].str.lower() == 'm']}
+groups_age =    {'18+': df[df['age'] >= 18], '18-': df[df['age'] < 18]}
 
 def get_percentage(df_subset, column_name):
     if df_subset.empty: return pd.Series(0.0, index=labels)
@@ -47,7 +43,7 @@ def get_average(df_subset, column_name):
 
 
 # ==========================================
-# PART 3: Generate the Text Report
+# PART 3: The Text Report
 # ==========================================
 
 print("=== SCORE DISTRIBUTION REPORT ===\n")
@@ -55,103 +51,123 @@ print("=== SCORE DISTRIBUTION REPORT ===\n")
 for dim in dimensions:
     print(f"--- {dim.upper()} ---")
     
-    avg_female = get_average(groups['Female'], dim)
-    avg_male = get_average(groups['Male'], dim)
-    avg_adult = get_average(groups['18+'], dim)
-    avg_child = get_average(groups['18-'], dim)
+    stats = {}
+    for g_name, g_df in {**groups_all, **groups_gender, **groups_age}.items():
+        stats[g_name] = {'avg': get_average(g_df, dim), 'pct': get_percentage(g_df, dim)}
     
-    pct_female = get_percentage(groups['Female'], dim)
-    pct_male = get_percentage(groups['Male'], dim)
-    pct_adult = get_percentage(groups['18+'], dim)
-    pct_child = get_percentage(groups['18-'], dim)
-    
-    print(f"[AVERAGE SCORES] Adults: {avg_adult}/10 | Children: {avg_child}/10 | Females: {avg_female}/10 | Males: {avg_male}/10\n")
+    print(f"[AVERAGES] All: {stats['All Samples']['avg']} | Females: {stats['Female']['avg']} | Males: {stats['Male']['avg']} | Adults: {stats['18+']['avg']} | Children: {stats['18-']['avg']}\n")
     
     for bracket in labels:
-        print(f"{pct_adult[bracket]}% of adults are in the {bracket} score bracket while "
-              f"{pct_child[bracket]}% of children are in the {bracket} score bracket.")
-        print(f"{pct_female[bracket]}% of females are in the {bracket} score bracket while "
-              f"{pct_male[bracket]}% of males are in the {bracket} score bracket.\n")
-    print("="*80 + "\n")
+        print(f"{stats['All Samples']['pct'][bracket]}% of ALL SAMPLES are in the {bracket} score bracket.")
+        print(f"{stats['Female']['pct'][bracket]}% of females ... {stats['Male']['pct'][bracket]}% of males.")
+        print(f"{stats['18+']['pct'][bracket]}% of adults ... {stats['18-']['pct'][bracket]}% of children.\n")
+    print("="*60 + "\n")
 
 
 # ==========================================
-# PART 4: Generate File 1 (GENDER CHART)
+# PART 4: Compact, Cinematic Chart Function
 # ==========================================
 
-plt.style.use('seaborn-v0_8-whitegrid')
+def plot_compact_dashboard(groups_dict, title, filename):
+    plt.style.use('seaborn-v0_8-whitegrid')
 
-# 4 rows, 1 column for a vertical stack of horizontal bar charts
-fig_gen, axes_gen = plt.subplots(nrows=4, ncols=1, figsize=(10, 12))
-fig_gen.suptitle('Gender Score Distributions (100% Stacked)', fontsize=18, fontweight='bold')
+    fig, axes = plt.subplots(
+        1, 4,
+        figsize=(14, 3),
+        sharex=True
+    )
 
-for i, dim in enumerate(dimensions):
-    avg_female = get_average(groups['Female'], dim)
-    avg_male = get_average(groups['Male'], dim)
-    
-    gender_df = pd.DataFrame(index=labels)
-    gender_df[f"Female\n(Avg: {avg_female})"] = get_percentage(groups['Female'], dim)
-    gender_df[f"Male\n(Avg: {avg_male})"] = get_percentage(groups['Male'], dim)
-    gender_df = gender_df.T 
-        
-    ax = axes_gen[i]
-    # kind='barh' makes the bars horizontal
-    gender_df.plot(kind='barh', stacked=True, ax=ax, color=pretty_colors, edgecolor='white', width=0.6)
-    
-    ax.set_title(f'{dim.capitalize()}', fontsize=14, fontweight='bold', pad=10)
-    ax.set_xlabel('Percentage (%)', fontsize=11) 
-    ax.set_xlim(0, 100) 
-    ax.invert_yaxis() # Puts 'Female' on top, 'Male' on bottom (reads more naturally)
-    
-    # Only put the legend on the very top chart
-    if i == 0: 
-        ax.legend(title='Score Brackets', bbox_to_anchor=(1.02, 1), loc='upper left')
-    else: 
-        ax.get_legend().remove()
+    fig.suptitle(title, fontsize=14, fontweight='bold')
 
-fig_gen.tight_layout()
-fig_gen.subplots_adjust(top=0.92, right=0.85)
+    for i, (ax, dim) in enumerate(zip(axes, dimensions)):
 
-filename_gen = 'gender_distributions.png'
-fig_gen.savefig(filename_gen, dpi=300, bbox_inches='tight')
-print(f"Chart successfully saved to {filename_gen}!")
+        temp_df = pd.DataFrame(index=labels)
 
+        for name, subset in groups_dict.items():
+            avg = get_average(subset, dim)
+            temp_df[f"{name}\n({avg:.1f})"] = get_percentage(subset, dim)
+
+        temp_df = temp_df.T
+
+        temp_df.plot(
+            kind='barh',
+            stacked=True,
+            ax=ax,
+            color=pretty_colors,
+            edgecolor='white',
+            width=0.5
+        )
+
+        ax.set_title(dim.capitalize(), fontsize=11, fontweight='bold')
+        ax.set_xlim(0, 100)
+        ax.invert_yaxis()
+
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+
+        if i != 0:
+            ax.set_yticklabels([])
+
+        ax.tick_params(axis='y', length=0)
+
+        legend = ax.get_legend()
+        if legend:
+            legend.remove()
+
+    handles, legend_labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        legend_labels,
+        title='Score Brackets',
+        loc='lower center',
+        ncol=5,
+        frameon=False,
+        bbox_to_anchor=(0.5, -0.02),
+        fontsize=9,
+        title_fontsize=10
+    )
+
+    plt.tight_layout()
+
+    plt.subplots_adjust(
+        left=0.06,
+        right=0.99,
+        top=0.76,
+        bottom=0.23,
+        wspace=0.1
+    )
+
+    fig.savefig(
+        filename,
+        dpi=300,
+        bbox_inches='tight'
+    )
+
+    print(f"Chart saved to {filename}")
 
 # ==========================================
-# PART 5: Generate File 2 (AGE CHART)
+# PART 5: Generate the 3 Files
 # ==========================================
 
-fig_age, axes_age = plt.subplots(nrows=4, ncols=1, figsize=(10, 12))
-fig_age.suptitle('Age Score Distributions (100% Stacked)', fontsize=18, fontweight='bold')
+plot_compact_dashboard(
+    groups_all,
+    'Score Distributions (All Samples)',
+    'all_distributions.png'
+)
 
-for i, dim in enumerate(dimensions):
-    avg_adult = get_average(groups['18+'], dim)
-    avg_child = get_average(groups['18-'], dim)
-    
-    age_df = pd.DataFrame(index=labels)
-    age_df[f"18+\n(Avg: {avg_adult})"] = get_percentage(groups['18+'], dim)
-    age_df[f"18-\n(Avg: {avg_child})"] = get_percentage(groups['18-'], dim)
-    age_df = age_df.T 
-        
-    ax = axes_age[i]
-    age_df.plot(kind='barh', stacked=True, ax=ax, color=pretty_colors, edgecolor='white', width=0.6)
-    
-    ax.set_title(f'{dim.capitalize()}', fontsize=14, fontweight='bold', pad=10)
-    ax.set_xlabel('Percentage (%)', fontsize=11) 
-    ax.set_xlim(0, 100) 
-    ax.invert_yaxis() # Puts '18+' on top, '18-' on bottom
-    
-    if i == 0: 
-        ax.legend(title='Score Brackets', bbox_to_anchor=(1.02, 1), loc='upper left')
-    else: 
-        ax.get_legend().remove()
+plot_compact_dashboard(
+    groups_gender,
+    'Gender Score Distributions',
+    'gender_distributions.png'
+)
 
-fig_age.tight_layout()
-fig_age.subplots_adjust(top=0.92, right=0.85)
+plot_compact_dashboard(
+    groups_age,
+    'Age Score Distributions',
+    'age_distributions.png'
+)
 
-filename_age = 'age_distributions.png'
-fig_age.savefig(filename_age, dpi=300, bbox_inches='tight')
-print(f"Chart successfully saved to {filename_age}!\n")
 
-# Show both plots on the screen
+# Display all figures on screen
 plt.show()
