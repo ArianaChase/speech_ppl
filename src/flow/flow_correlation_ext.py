@@ -1,193 +1,137 @@
 import os
-import numpy as np
-import pandas as pd
-import scipy.stats
-from sklearn.preprocessing import MinMaxScaler
-import argparse
 import json
-from operator import itemgetter
+import time
+import numpy as np
+import scipy.stats
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import time
+
+# --- CONFIGURATION ---
+ROOT_DIR = "/home/u5504709/new_work/speech_ppl/work/data/speechocean"
+LABELS_PATH = "/home/u5504709/new_work/speech_ppl/src/scores_enhanced.json"
+SERVICE_ACCOUNT = "/home/u5504709/new_work/speech_ppl/src/service_account.json"
+SPREADSHEET_NAME = "Pronunciation Evaluation Results"
+WORKSHEET_NAME = "new_flow"
+
+# Model name mappings
+MODELS = {
+    "1b_extend": {"short": "1bext", "full": "Flow-SLM-1Bext"},
+    "1b": {"short": "1b", "full": "Flow-SLM-1B"},
+    "270m": {"short": "270m", "full": "Flow-SLM-270M"}
+}
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-service_account_file="/home/u5504709/new_work/speech_ppl/src/service_account.json"
-
-# Authenticate
 creds = Credentials.from_service_account_file(
-    service_account_file,
+    SERVICE_ACCOUNT,
     scopes=SCOPES
 )
 
 client = gspread.authorize(creds)
 
-start_time = time.time()
+# The 5 filters you requested
+FILTERS = {
+    "all": lambda x: True,
+    "genderedf": lambda x: x.get("gender") == "f",
+    "genderedm": lambda x: x.get("gender") == "m",
+    "aged18": lambda x: int(x.get("age", 0)) >= 18,
+    "agednot18": lambda x: int(x.get("age", 0)) < 18
+}
 
-def parse_human_annotations(filename):
-    human_scores = []
-    unique_speakers = set()
+def load_human_scores(json_path):
+    with open(json_path) as f:
+        return json.load(f)
 
-    with open(filename) as json_data:
-        data = json.load(json_data)
-        for audio_file in data:
-            print(audio_file)
-            value = data[audio_file]
-            unique_speakers.add(audio_file[1:5])
+def safe_pearson(x, y):
+    """Calculates PCC, returning 0 if arrays are invalid (e.g., zero variance)."""
+    if len(x) < 2 or np.std(x) == 0 or np.std(y) == 0:
+        return 0.0, 1.0
+    res = scipy.stats.pearsonr(x, y)
+    return res.statistic, res.pvalue
 
-            #if value["gender"] == "m":
-            human_scores.append({
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"]
-            })
+def read_loss_file(filepath):
+    """Extracts dict of {filename_id: loss_value} from text format."""
+    data = {}
+    if not os.path.exists(filepath): return data
+    with open(filepath, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 2:
+                # Extracts '000030012' from 'test_0_000030012'
+                file_id = parts[0].split('_')[-1]
+                data[file_id] = float(parts[1])
+    return data
 
-    return human_scores, unique_speakers
+def process_batch():
+    start_time = time.time()
+    human_scores = load_human_scores(LABELS_PATH)
+    all_rows = []
 
+    # Traverse Model -> Batch -> Loss Type
+    for model_dir, model_info in MODELS.items():
+        for batch_idx in range(1, 11):
+            batch_path = os.path.join(ROOT_DIR, model_dir, str(batch_idx))
+            if not os.path.exists(batch_path): continue
 
-def calc_correlation(output_df, dim):
-    x = output_df["loss"]
+            # Combine test and train sets for this batch
+            for loss_type, filename in [("acoustic", "loss.txt"), ("semantic", "token_loss.txt")]:
+                combined_losses = {}
+                combined_losses.update(read_loss_file(os.path.join(batch_path, "test", filename)))
+                combined_losses.update(read_loss_file(os.path.join(batch_path, "train", filename)))
 
-    if dim == "accuracy":
-        y = output_df["Human Annotation (Accuracy)"]
-    elif dim == "fluency":
-        y = output_df["Human Annotation (Fluency)"]
-    elif dim == "prosodic":
-        y = output_df["Human Annotation (Prosody)"]
-    elif dim == "completeness":
-        y = output_df["Human Annotation (Completeness)"]
-    else:
-        print("Invalid dimension")
-        return
+                if not combined_losses: continue
 
-    # force numeric + clean
-    x = pd.to_numeric(x, errors="coerce")
-    y = pd.to_numeric(y, errors="coerce")
+                # Evaluate all 5 filters
+                for filter_name, filter_func in FILTERS.items():
+                    # Align scores based on the filter
+                    x_losses, y_acc, y_flu, y_pro, y_com = [], [], [], [], []
+                    unique_speakers = set()
 
-    mask = x.notna() & y.notna()
-    x = x[mask].to_numpy(dtype=float)
-    y = y[mask].to_numpy(dtype=float)
+                    for file_id, loss_val in combined_losses.items():
+                        # Determine human dict key (usually matches exactly, but check if it's nested)
+                        h_data = human_scores.get(file_id) or human_scores.get(f"/{file_id}.wav")
+                        if h_data and filter_func(h_data):
+                            x_losses.append(loss_val)
+                            y_acc.append(h_data["accuracy"])
+                            y_flu.append(h_data["fluency"])
+                            y_pro.append(h_data["prosodic"])
+                            y_com.append(h_data["completeness"])
+                            unique_speakers.add(file_id[1:5]) # standard speaker ID extraction
 
-    result = scipy.stats.pearsonr(x, y)
+                    sample_count = len(x_losses)
+                    speaker_count = len(unique_speakers)
+                    if sample_count < 2: continue
 
-    print(f"=== Correlation for dimension {dim} ===")
-    print("Correlation x len:", len(x))
-    print("Correlation y len:", len(y))
-    print("Correlation value is:", result, "\n")
+                    # Calculate Correlations
+                    acc_r, acc_p = safe_pearson(x_losses, y_acc)
+                    flu_r, flu_p = safe_pearson(x_losses, y_flu)
+                    pro_r, pro_p = safe_pearson(x_losses, y_pro)
+                    com_r, com_p = safe_pearson(x_losses, y_com)
 
-    return result
+                    # Create identifiers (e.g., flow1bext_likelihood_genderedf_7)
+                    run_id = f"flow{model_info['short']}_likelihood_{filter_name}_{batch_idx}"
+                    if filter_name == "all": run_id = f"flow{model_info['short']}_likelihood_{batch_idx}"
+                    
+                    finish_time = datetime.now().strftime("%m-%d-%Y %H:%M")
+                    m_name = f"{model_info['full']}_{loss_type}"
+                    duration = round(time.time() - start_time, 2)
 
-def losses_to_dict(loss_file, human_scores):
-    # Create a lookup dictionary for O(1) matching instead of nested loops
-    human_dict = {obj["filename"]: obj for obj in human_scores}
-    loss_objects = []
+                    # Build row payloads
+                    base_row = [run_id, finish_time, "Flow-SLM", m_name, speaker_count, sample_count]
+                    all_rows.append([f"Accuracy-Likelihood_Correlation"] + base_row + [acc_r, acc_p, duration])
+                    all_rows.append([f"Fluency-Likelihood_Correlation"] + base_row + [flu_r, flu_p, duration])
+                    all_rows.append([f"Prosody-Likelihood_Correlation"] + base_row + [pro_r, pro_p, duration])
+                    all_rows.append([f"Completeness-Likelihood_Correlation"] + base_row + [com_r, com_p, duration])
 
-    with open(loss_file, mode='r') as file:
-        for line in file:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Split line by whitespace: expected format "test_0_000030012 -0.30289340019226074"
-            parts = line.split()
-            if len(parts) != 2:
-                continue
-                
-            raw_id, loss_val = parts[0], parts[1]
-            
-            # Extract the 9-digit filename from the raw_id (e.g., gets "000030012")
-            filename = raw_id.split('_')[-1]
-            spk = filename[1:5]
-
-            if filename in human_dict and spk != "1076":
-                human_annotation_obj = human_dict[filename]
-
-                loss_objects.append({
-                    "filename" : filename,
-                    "loss" : loss_val,
-                    "Human Annotation (Accuracy)" : human_annotation_obj["accuracy"],
-                    "Human Annotation (Fluency)" : human_annotation_obj["fluency"],
-                    "Human Annotation (Prosody)" : human_annotation_obj["prosodic"],
-                    "Human Annotation (Completeness)" : human_annotation_obj["completeness"],
-                })
-    
-    print("Length of list: ", len(loss_objects))
-    print("Length of labels: ", len(human_scores))
-    if len(loss_objects) > 0:
-        print(loss_objects[0])
-
-    return loss_objects
-
-def append_to_sheet(
-    row_data,
-    spreadsheet_name="Pronunciation Evaluation Results",
-    worksheet_name="main",
-):
-    # Open sheet
-    spreadsheet = client.open(spreadsheet_name)
-    worksheet = spreadsheet.worksheet(worksheet_name)
-
-    # Append row
-    worksheet.append_row(row_data)
-
-    print("Spreadsheet updated successfully.")
-
+    # Batch push to Google Sheets
+    print(f"Computed {len(all_rows)} metric rows. Pushing to Google Sheets...")
+    worksheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
+    worksheet.append_rows(all_rows)
+    print(f"Successfully appended all rows in {round(time.time() - start_time, 2)} seconds.")
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--name", type=str, default="experiment")
-    parser.add_argument("--index", type=int, default=0)
-    parser.add_argument("--model", type=str, default="Target_Model")
-    parser.add_argument("--category", type=str, default="None")
-
-    parser.add_argument("--loss_file", help="Path to losses", default=None)
-    parser.add_argument("--labels_dir", help="Path to labels", default=None)
-
-    args = parser.parse_args()
-
-    loss_file = args.loss_file
-
-    # get labels to compare to
-    score_labels = args.labels_dir
-    human_scores, unique_speakers = parse_human_annotations(score_labels)
-    human_scores = sorted(human_scores, key=itemgetter("filename"))
-
-    loss_dict = losses_to_dict(loss_file, human_scores)
-    output_csv_df = pd.DataFrame.from_dict(loss_dict)
-
-    print(output_csv_df.head())
-
-    speaker_count = len(unique_speakers) - 1
-    sample_count = len(loss_dict)
-
-    # Capture and format the finish time 
-    now = datetime.now() 
-    finish_time = now.strftime("%m-%d-%Y %H:%M") 
-    print(f"Date and time at completion: {finish_time}") 
-    duration = time.time() - start_time
-    print(f"Program '{args.name}' finished executing in {duration} seconds.")
-
-    # == Calculate Single Loss Correlations ==
-    MODEL_NAME = "Flow-SLM-1bext_semantic" # Set dynamically based on args
-
-    accuracy_result = calc_correlation(output_csv_df, "accuracy")
-    fluency_result = calc_correlation(output_csv_df, "fluency")
-    prosody_result = calc_correlation(output_csv_df, "prosodic")
-    completeness_result = calc_correlation(output_csv_df, "completeness")
-
-    # Format the name identifier securely
-    run_identifier = f"{args.name}_{args.index}"
-    category_str = str(args.category)
-
-    # Append to Sheets
-    append_to_sheet([f"Accuracy-{category_str}", run_identifier, finish_time, args.model, MODEL_NAME, speaker_count, sample_count, accuracy_result.statistic, accuracy_result.pvalue, duration])
-    append_to_sheet([f"Fluency-{category_str}", run_identifier, finish_time, args.model, MODEL_NAME, speaker_count, sample_count, fluency_result.statistic, fluency_result.pvalue, duration])
-    append_to_sheet([f"Prosody-{category_str}", run_identifier, finish_time, args.model, MODEL_NAME, speaker_count, sample_count, prosody_result.statistic, prosody_result.pvalue, duration])
-    append_to_sheet([f"Completeness-{category_str}", run_identifier, finish_time, args.model, MODEL_NAME, speaker_count, sample_count, completeness_result.statistic, completeness_result.pvalue, duration])
+    process_batch()

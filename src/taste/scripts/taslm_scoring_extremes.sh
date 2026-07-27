@@ -1,7 +1,7 @@
 set -e 
 
 echo "Activating virtual environment..."
-root_dir=~/speech_ppl
+root_dir=~/new_work/speech_ppl
 cd $root_dir
 source $root_dir/venv/taste/.venv/bin/activate
 

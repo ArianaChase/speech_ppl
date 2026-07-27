@@ -16,7 +16,7 @@ from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
 from datetime import datetime
 from operator import itemgetter
-
+import torch.nn.functional as F
 import os
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 start_time = time.time()
@@ -42,6 +42,8 @@ class TaslmSpeechPPLWrapper:
         )
         #self.model = self.model.to(torch.float32)
         self.model = self.model.to(device=self.device, dtype=torch.bfloat16)
+
+        print(self.model)
 
         self.model.eval()
         self.processor = TasteProcessor.from_pretrained(
@@ -105,14 +107,18 @@ class TaslmSpeechPPLWrapper:
         audio_sample,
         text=None,
         spk_embed=None,
-    ) -> torch.Tensor:
+    ) -> "tuple[torch.Tensor, torch.Tensor]":
+        """
+        Returns:
+            per_word_nll: 1D tensor, one summed-across-4-layers NLL per real word
+                        (padding already removed)
+            text_word_nll: 1D tensor, per-word text-token NLL (bonus, see TODO 5)
+        """
         raw_audio, sr = self.get_audio_sample_and_sr(audio_sample)
-        # process audio
-
-        # If spk_embed is provided externally, ensure it is bf16
+    
         if spk_embed is not None and torch.is_floating_point(spk_embed):
             spk_embed = spk_embed.to(device=self.device, dtype=torch.bfloat16)
-
+    
         inputs = self.processor(
             audio=raw_audio,
             sampling_rate=sr,
@@ -121,15 +127,14 @@ class TaslmSpeechPPLWrapper:
             output_text_info=True,
             speaker_embed=spk_embed,
         )
-
-        # Move to device and cast ONLY floating point tensors to bfloat16
+    
         for k, v in inputs.items():
             if isinstance(v, torch.Tensor):
                 if torch.is_floating_point(v):
                     inputs[k] = v.to(device=self.device, dtype=torch.bfloat16)
                 else:
-                    inputs[k] = v.to(device=self.device) # Keep IDs as Integers/Long
-
+                    inputs[k] = v.to(device=self.device)
+    
         asr_indices, llm_indices = self.model.extract_vq(
             asr_token_ids=inputs["asr_token_ids"],
             asr_token_lengths=inputs["asr_token_lengths"],
@@ -140,34 +145,109 @@ class TaslmSpeechPPLWrapper:
             audio_features=inputs["audio_features"],
             audio_feature_lengths=inputs["audio_feature_lengths"],
         )
-        # manually compute per-token loss
+    
         vq_module = self.model.audio_tower.vq.rvq
+
         slm_outputs = self.model.spoken_lm(
-            llm_indices=llm_indices, 
-            llm_token_ids=inputs["llm_token_ids"], 
-            llm_token_lengths=inputs["llm_token_lengths"], 
+            llm_indices=llm_indices,
+            llm_token_ids=inputs["llm_token_ids"],
+            llm_token_lengths=inputs["llm_token_lengths"],
             llm_word_ids=inputs["llm_word_ids"],
+            asr_indices=asr_indices,
+            asr_token_ids=inputs['asr_token_ids'],
+            asr_token_lengths=inputs['asr_token_lengths'],
+            asr_word_ids=inputs['asr_word_ids'],
             vq_module=vq_module,
         )
-        mse_loss = self.model.spoken_lm._calcuate_loss_taste_mse(
-            vq_module=vq_module,
-            taste_logits=slm_outputs["taste_logits"],
-            taste_labels=slm_outputs["taste_labels"],
-        )
-        # for key, val in slm_outputs.items():
-        #     print(f"{key}: {val}")
-        #     if isinstance(val, torch.Tensor):
-        #         print(f"  shape: {val.shape}")
-        # print(f"mse_loss shape: {mse_loss.shape}")
-        # print(mse_loss)
-        mse_loss_by_words = mse_loss.mean(dim=-1).to(torch.float32).cpu().numpy()
+    
+        # ------------------------------------------------------------------
+        # TODO 1: pull the acoustic logits/labels out of slm_outputs.
+        # You already printed this dict earlier in the conversation --
+        # what were the two acoustic-side keys called?
+        # ------------------------------------------------------------------
+        taste_logits = slm_outputs["taste_logits"]   # TODO: shape should be [1, words, 4, 512]
+        taste_labels = slm_outputs["taste_labels"]   # TODO: shape should be [1, words, 4]
+        print(f"taste_logits: {slm_outputs['taste_logits']}")
 
-        # print(f"mse_loss_by_words: {mse_loss_by_words}, len: {len(mse_loss_by_words)}")
-        # words = inputs["words"][0]
-        # print("words:", words,  len(words))
-        return mse_loss_by_words
+        print(f"taste_logits shape: {taste_logits.shape}")
+        print(f"taste_labels shape: {taste_labels.shape}")
 
-def create_csv_file(output_dir, name): # gslm_001
+        assert taste_logits.ndim == 4, f"expected 4D, got {taste_logits.shape}"
+        assert taste_logits.shape[-1] == 512, "last dim should be codebook size"
+    
+        R = taste_logits.shape[2]  # TODO: which index in the shape tuple is R?
+    
+        # ------------------------------------------------------------------
+        # TODO 2: for each of the R codebook layers, compute per-word
+        # cross-entropy between that layer's logits and that layer's labels.
+        #
+        # F.cross_entropy wants:
+        #   input  shape [N, num_classes]
+        #   target shape [N]
+        # but taste_logits[:, :, r, :] is [1, words, 512] and
+        #     taste_labels[:, :, r]   is [1, words]
+        # so you'll need to flatten the batch+words dims together first.
+        # Hint: .squeeze(0) removes the batch dim since batch=1 here.
+        # Hint: reduction='none' keeps one loss value per word instead of
+        #       collapsing to a single scalar.
+        # Hint: ignore_index=-1 makes padded (-1) positions contribute 0
+        #       automatically -- you don't need to mask them out yourself yet.
+        # ------------------------------------------------------------------
+        per_layer_losses = []
+        for r in range(R):
+            logits_r = taste_logits[:, :, r, :].squeeze(0)  # [7, 512]
+            labels_r = taste_labels[:, :, r].squeeze(0)      # [7]
+            
+            print(f"Layer {r}:")
+            print(f"  labels_r: {labels_r}")
+            print(f"  labels_r min/max: {labels_r.min()}, {labels_r.max()}")
+            print(f"  logits_r min/max: {logits_r.min()}, {logits_r.max()}")
+            
+            loss_r = F.cross_entropy(
+                logits_r.to(torch.float32),
+                labels_r,
+                ignore_index=-1,
+                reduction="none",
+            )
+            print(f"  loss_r: {loss_r}")
+            per_layer_losses.append(loss_r)
+        
+        # ------------------------------------------------------------------
+        # TODO 3: Eq. 6 SUMS the R per-layer losses together at each word
+        # position (not averages). Stack the R tensors and reduce along the
+        # right dimension.
+        # ------------------------------------------------------------------
+        stacked = torch.stack(per_layer_losses, dim=0)   # TODO: what shape do you want before reducing?
+        per_word_nll = stacked.sum(dim=0)                # TODO: sum over which axis -- layers or words?
+    
+        assert per_word_nll.shape[0] == taste_labels.shape[1], "should have one value per word"
+    
+        # ------------------------------------------------------------------
+        # TODO 4: remove the padded positions from the result.
+        # A word position is padding if ALL its layers were -1 in taste_labels
+        # (they pad together, so checking layer 0 is enough).
+        # ------------------------------------------------------------------
+        valid_mask = taste_labels[:,:,0].squeeze(0) != -1  # TODO: boolean tensor, shape [words], True = real word
+        print(f"valid mask: {valid_mask}")
+        per_word_nll = per_word_nll[valid_mask]
+        print(f"per_word_nll: {per_word_nll}")
+
+        print("CEL: ", per_word_nll.to(torch.float32).cpu())
+    
+        # ------------------------------------------------------------------
+        # TODO 5 (bonus, do this after 1-4 work): repeat the same idea for the
+        # TEXT side (text_logits / text_labels), so you can report both an
+        # acoustic-PPL and a text-PPL per utterance, side by side.
+        # This one has only ONE layer (no R loop needed) -- everything else
+        # about masking padding is the same pattern.
+        # ------------------------------------------------------------------
+        text_logits = ...   # TODO
+        text_labels = ...   # TODO
+        text_word_nll = ...  # TODO: same cross_entropy + mask pattern, no R loop
+    
+        return per_word_nll.to(torch.float32).cpu(), text_word_nll.to(torch.float32).cpu()
+
+def create_csv_file(output_dir, name):
     filename = '%s/%s' % (output_dir, name)
 
     print("Creating csv with file name: ", filename, " ...")
@@ -199,9 +279,12 @@ def get_directory_losses(dir, csv_name, spk, labels_list):
                 audio_sample={"array": audio, "sampling_rate": sr}
             )
         per_token_losses_tensor = torch.from_numpy(per_word_losses)
-        per_word_losses_mean = torch.mean(per_token_losses_tensor)
 
-        human_annotation_obj = None
+        print("The utterance: ", filename)
+        print("Per token losses list? -> ", per_token_losses_tensor)
+        #per_word_losses_mean = torch.mean(per_token_losses_tensor)
+
+        # human_annotation_obj = None
 
         for obj in labels_list:
             if obj["filename"] == filename:
@@ -310,8 +393,8 @@ if __name__ == "__main__":
 
     # loop through all directories of the dataset
     for dirs in pbar:
-        #if counter >= 2:
-        #    break
+        if counter >= 2:
+            break
         speaker = dirs[7:None]
         if int(speaker) != 1076:
             pbar.set_description(f"Processing speaker: {speaker}")
@@ -320,7 +403,7 @@ if __name__ == "__main__":
             get_directory_losses(dir_path, output_csv, speaker, human_scores)
         else:
             pass
-        #counter += 1
+        counter += 1
 
 
     output_csv_df = pd.read_csv(output_csv)

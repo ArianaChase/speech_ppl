@@ -21,7 +21,7 @@ export CUDA_VISIBLE_DEVICES=0
 
 echo "Running gslm_scoring..."
 python $root_dir/src/gslm/tools/gslm_scoring.py --help 
-python $root_dir/src/gslm/tools/gslm_scoring_aged.py \
+python $root_dir/src/gslm/tools/gslm_scoring_phone.py \
 	--name $name \
 	--dataset_dir $root_dir/speechocean762/WAVE/ \
     --language_model_dir $pretrained_model_dir/gslm/hubert100_lm \
@@ -30,5 +30,6 @@ python $root_dir/src/gslm/tools/gslm_scoring_aged.py \
 	--device cuda \
 	--index $index \
 	--category $category \
-	--model $model
+	--model $model \
+	--alignments $root_dir/src/mfa/phone_extraction.json
 
