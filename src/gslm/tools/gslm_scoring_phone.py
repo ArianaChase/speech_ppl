@@ -24,10 +24,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from difflib import SequenceMatcher
 
-# SCOPES = [
-#     "https://www.googleapis.com/auth/spreadsheets",
-#     "https://www.googleapis.com/auth/drive"
-# ]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
 start_time = time.time()
 
@@ -40,6 +40,7 @@ print(torch.cuda.device_count())  # Number of GPUs
 print(torch.cuda.current_device())  # Index of the current device
 print(torch.cuda.get_device_name(0))  # Name of GPU 0
 
+MODEL_TYPE="GSLM"
 MODEL_NAME="GSLM"
 GSLM_INPUT_SAMPLE_RATE = 16000
 FIELDNAMES = ["filename", "speaker", "ppl_loss", "human_annotated_accuracy"]
@@ -128,13 +129,10 @@ class GslmSpeechPplWrapper:
         input_ids = input_ids.unsqueeze(0)  # add batch dim (1, seq_len)
 
         # deal with durations and convert to seconds
-        print(f"These are the durations: {_durations}")
         token_ends_frames = torch.cumsum(_durations, dim=0) # [5, 3+5, 1+3+5, ...]
         token_starts_frames = token_ends_frames - _durations # [0, 5, 8, ...]
         t_start = token_starts_frames * self.tokens_framerate  # seconds
         t_end = token_ends_frames * self.tokens_framerate
-
-        print(f"These are the second-based START timestamps of each token in this utterance: {t_start}")
 
         # making training samples!!!
         labels = input_ids.clone()
@@ -145,10 +143,6 @@ class GslmSpeechPplWrapper:
         logits = self.sampler.model(input_ids)[0] # raw predicted scores!! No softmax becaue cross_entropy does it
         
         logits_reshaped = logits.reshape(-1, logits.size(-1))
-
-        print(f"There are {len(logits_reshaped)} logits.")
-        print(f"There are {len(t_start)} START timstamps aligning with each logit.")
-        print(f"There are {len(t_end)} END timstamps aligning with each logit.")
 
         # calcuate CE loss
         loss_all_tokens = F.cross_entropy(
@@ -186,35 +180,77 @@ def is_overlapping(a_start, a_end, b_start, b_end):
     else:
         return False
 
-def get_directory_losses(dir, csv_name, spk, labels_dict, alignments_path):
+def process_speechocean(input_dataset):
 
-    root_dir = dir
-    output_csv = csv_name
-    speaker = spk
-    phone_level_ppl_info = []
+        audio_file_info = []
+        spk_count = 0
+        ignored_speakers = ["1076"]
+        removed = []
+
+        pbar = tqdm(sorted(os.listdir(input_dataset)))
+
+        for spk_dir in pbar:
+            spk_count += 1
+            speaker = spk_dir[7:None]
+            pbar.set_description(f"Processing speaker: {speaker}")
+            spk_dir_path = os.path.join(input_dataset, spk_dir)
+            for audio_file in os.listdir(spk_dir_path):
+                audio_path = os.path.join(spk_dir_path, audio_file)
+                filename = os.path.basename(audio_path)[0:9]
+                audio_file_info.append({
+                    "speaker" : speaker,
+                    "filename" : filename,
+                    "path" : audio_path
+                })
+        
+        for i in range(len(audio_file_info) - 1, -1, -1):
+            if audio_file_info[i]["speaker"] in ignored_speakers:
+                removed.append(audio_file_info.pop(i))
+                          
+
+        return {
+            "processed" : audio_file_info,
+            "ignored" : removed,
+            "spk_count" : spk_count - len(ignored_speakers)
+        }
+
+def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm=False, limit=None):
+    '''
+    dataset         : dataset object with speaker, filename, and path
+    labels_dict     : dictionary of human annotated information, sorted by filename 
+    alignments_path : json file of phone-level alignment boundaries
+    granularity     : phone/word level
+    pooling         : pooling method (max/mean/std)
+    norm            : normalization
+    '''
+    ppl_info = []
     file_count = 0
     error_log = []
+    nan_count = 0
+    lim = limit if limit != None else len(dataset)
 
     with open(alignments_path, 'r') as f:
         alignment_list = json.load(f)
 
-    pbar = tqdm(sorted(os.listdir(root_dir)))
-
-    for files in pbar:
+    pbar = tqdm(dataset)
+    for sample in pbar:
+        if file_count >= lim:
+            break
         
-        file_path = os.path.join(root_dir, files)
-        filename = os.path.basename(file_path)[0:9]
+        # info
+        speaker = sample["speaker"]
+        file_path = sample["path"]
+        filename = sample["filename"]
         utterance_ppl_info = []
+        pbar.set_description(f"Getting per phone losses for file: {filename}")
 
-        pbar.set_description(f"Getting per token losses for file: {filename}")
-
+        # load audio
         audio, sr = torchaudio.load(file_path)
         audio = audio.to(device)
 
         # external preparation
         alignment_obj = next((item for item in alignment_list if item.get('audio_id') == filename), None)
         phone_alignments = alignment_obj["phone_alignment"]
-
         human_annotation_obj = labels_dict.get(filename)
         phone_scores = []
         for word_obj in human_annotation_obj["words"]:
@@ -232,12 +268,10 @@ def get_directory_losses(dir, csv_name, spk, labels_dict, alignments_path):
         has_error = False
         matched_alignments = []
         matched_scores = []
-
         for tag, a_idx1, a_idx2, b_idx1, b_idx2 in opcodes:
             if tag == "equal":
                 matched_scores.extend(phone_scores[a_idx1:a_idx2])
                 matched_alignments.extend(phone_alignments[b_idx1:b_idx2])
-        
         phone_alignments = matched_alignments
         phone_scores = matched_scores
 
@@ -248,38 +282,44 @@ def get_directory_losses(dir, csv_name, spk, labels_dict, alignments_path):
         # aggregate
         for i in range(0, len(phone_alignments)):
             current_phone = phone_alignments[i]
-            #print(f"Inspecting phoneme {i+1}, {current_phone['label']}")
 
             p_start = current_phone["start"]
             p_end = current_phone["end"]
-            phone_loss_sum = 0
-            phone_loss_count = 0
+            phone_losses = []
 
             for loss_item in losses_with_timestamps:
                 t_start = loss_item[1]
                 t_end = loss_item[2]
                 if is_overlapping(p_start, p_end, t_start, t_end):
-                    phone_loss_count += 1
-                    phone_loss_sum += loss_item[0]
+                    phone_losses.append(loss_item[0])
             
-            phone_loss_mean = phone_loss_sum / phone_loss_count
+            # pooling
+            phone_loss_pooled = np.nan
+            
+            if pooling == "mean":
+                phone_loss_pooled = np.mean(phone_losses) if len(phone_losses) > 0 else np.nan
+            elif pooling == "max":
+                phone_loss_pooled = np.max(phone_losses) if len(phone_losses) > 0 else np.nan
+            elif pooling == "std":
+                phone_loss_pooled = np.std(phone_losses) if len(phone_losses) > 1 else np.nan
+            else:
+                raise Exception("No pooling method specified.")
+            
+            if np.isnan(phone_loss_pooled):
+                nan_count += 1
+
             utterance_ppl_info.append({
                 "speaker" : speaker,
                 "filename" : filename,
                 "phone" : current_phone['label'],
-                "phone_ppl_loss" : phone_loss_mean,
+                "phone_ppl_loss" : phone_loss_pooled,
                 "phone_human_score": phone_scores[i][1]
             })
 
-        # print(f"Phone level info : {utterance_ppl_info}")
-        # print(f"There are {len(utterance_ppl_info)} phone level ppl losses in this utterance.")
-        # print(f"There are {len(phone_alignments)} phone alignments.")
-        # print(f"There are {len(phone_scores)} pieces of human annotated phone scores.")
-
         if len(phone_alignments) != len(utterance_ppl_info):
-            error_log.append(f"[LOSS/ALIGNMENT MISMATCH] Phone segmentation does not match at file {filename}. {len(phone_alignments)} phone alignments but {len(phone_level_ppl_info)} losses") 
+            error_log.append(f"[LOSS/ALIGNMENT MISMATCH] Phone segmentation does not match at file {filename}. {len(phone_alignments)} phone alignments but {len(ppl_info)} losses") 
         
-        phone_level_ppl_info += utterance_ppl_info
+        ppl_info += utterance_ppl_info
         file_count += 1
 
     with open("/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log", "a") as f:
@@ -288,8 +328,8 @@ def get_directory_losses(dir, csv_name, spk, labels_dict, alignments_path):
             f.write("\n")
 
     return {
-        "phone_level_ppl_info" : phone_level_ppl_info,
-        "file_count" : file_count
+        "results" : ppl_info,
+        "nan_count" : nan_count
     }
 
 def parse_human_annotations(filename):
@@ -297,7 +337,6 @@ def parse_human_annotations(filename):
     with open(filename) as json_data:
         data = json.load(json_data)
         for audio_file in data:
-            print(audio_file)
             value = data[audio_file]
             human_scores[audio_file] = {
                 "filename" : audio_file,
@@ -311,7 +350,7 @@ def parse_human_annotations(filename):
 
 def append_to_sheet(
     row_data,
-    spreadsheet_name="Pronunciation Evaluation Results",
+    spreadsheet_name="ICASSP 2026 Experiment Results",
     worksheet_name="main",
     service_account_file="/home/u5504709/new_work/speech_ppl/src/service_account.json"
 ):
@@ -351,7 +390,6 @@ if __name__ == "__main__":
     
     open('/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log', 'w').close()
 
-
     # detect device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # create model
@@ -378,43 +416,48 @@ if __name__ == "__main__":
     score_labels = args.labels_dir
     human_scores = parse_human_annotations(score_labels)
 
-    # calculating per token losses
-
-    print("Calculating per token losses...")
-    output_csv = create_csv_file(args.output_dir, "gslm_ppl_phone")
+    # process dataset
     input_dataset = args.dataset_dir
-    
-    pbar = tqdm(sorted(os.listdir(input_dataset)))
 
-    # loop through all directories of the dataset
-    counter = 0
-    file_count = 0
-    phone_level_info = []
+    processed = process_speechocean(input_dataset)
+    processed_dataset = processed["processed"]
+    ignored_samples = processed["ignored"]
+    spk_count = processed["spk_count"]
+    print(f"Processed {len(processed_dataset)} samples.")
 
-    for dirs in pbar:
-        if counter >= 20:
-           break
-        speaker = dirs[7:None]
-        if int(speaker) != 1076:
-            pbar.set_description(f"Processing speaker: {speaker}")
-            dir_path = os.path.join(input_dataset, dirs)
-            # get losses for each file in the directory and record in csv
-            result =  get_directory_losses(dir_path, output_csv, speaker, human_scores, args.alignments)
-            file_count += result["file_count"]
-            phone_level_info += result["phone_level_ppl_info"]
-        counter += 1
+    # calculate losses
 
-    # correlate
-    df = pd.DataFrame(phone_level_info)
-    print(df.head())
+    GRANULARITY = "phone"
+    NORM = False
 
-    x = df["phone_ppl_loss"]
-    y = df["phone_human_score"]
-    result = scipy.stats.pearsonr(x, y)
+    for pool in ["mean", "max", "std"]:
+        results = get_losses(
+            dataset=processed_dataset, 
+            labels_dict=human_scores, 
+            alignments_path=args.alignments, 
+            granularity=GRANULARITY,
+            pooling=pool,
+            norm=NORM,
+            limit=400,
+            )
+        
+        ppl_results = results["results"]
+        nan_percent = (results["nan_count"] / len(ppl_results)) * 100
+        
+        # correlate
+        df = pd.DataFrame(ppl_results)
+        df.dropna(axis=0, inplace=True)
 
-    print(f"Speaker count: {counter}")
-    print(f"File count: {file_count}")
-    print(f"Correlation: {result}")
+        x = df["phone_ppl_loss"]
+        y = df["phone_human_score"]
+        pcc = scipy.stats.pearsonr(x, y)
+
+        # Record in CSV
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, GRANULARITY, pool, NORM, pcc.statistic, "n/a", f"{nan_percent:2f}" + "%", len(df)])
+
+
+    print(f"Speaker count: {spk_count}")
+    print(f"File count: {len(processed_dataset)}")
 
     # Capture and format the finish time 
     now = datetime.now() 
@@ -422,8 +465,3 @@ if __name__ == "__main__":
     print(f"Date and time at completion: {finish_time}") 
     duration = time.time() - start_time
     print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")
-
-    # append_to_sheet(["Accuracy-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, accuracy_result.statistic, accuracy_result.pvalue, duration])
-    # append_to_sheet(["Fluency-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, fluency_result.statistic, fluency_result.pvalue, duration])
-    # append_to_sheet(["Prosody-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, prosody_result.statistic, prosody_result.pvalue, duration])
-    # append_to_sheet(["Completeness-" + args.category, args.name + "_" + str(args.index), finish_time, args.model, MODEL_NAME, completeness_result.statistic, completeness_result.pvalue, duration])
