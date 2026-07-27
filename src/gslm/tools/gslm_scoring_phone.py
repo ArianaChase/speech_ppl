@@ -250,73 +250,99 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
         # external preparation
         alignment_obj = next((item for item in alignment_list if item.get('audio_id') == filename), None)
-        phone_alignments = alignment_obj["phone_alignment"]
+        phone_alignments = alignment_obj["phone_alignment"] # list of phone objects {start, end, label}
+        word_alignments = alignment_obj["word_alignment"] # list of word objects {start, end, label}
+        alignments = None
+
         human_annotation_obj = labels_dict.get(filename)
         phone_scores = []
+        word_scores = []
+
         for word_obj in human_annotation_obj["words"]:
             for i in range(0, len(word_obj["phones"])):
-                phone_scores.append((word_obj["phones"][i], word_obj["phones-accuracy"][i])) 
+                phone_scores.append({
+                    "phone" : word_obj["phones"][i], 
+                    "accuracy" : word_obj["phones-accuracy"][i]
+                }) 
+            word_scores.append({
+                "word" : word_obj["text"],
+                "accuracy" : word_obj["accuracy"],
+                "stress" : word_obj["stress"] # unused for now
+            })
 
+        if granularity == "phone":
+            # align canonical phonemes and phone alignments
+            phone_alignments_labels = [item['label'] for item in phone_alignments]
+            phone_scores_labels = [item['phone'] for item in phone_scores]
+
+            matcher = SequenceMatcher(None, phone_scores_labels, phone_alignments_labels)
+            opcodes = matcher.get_opcodes()
+            has_error = False
+            matched_alignments = []
+            matched_scores = []
+            for tag, a_idx1, a_idx2, b_idx1, b_idx2 in opcodes:
+                if tag == "equal":
+                    matched_scores.extend(phone_scores[a_idx1:a_idx2])
+                    matched_alignments.extend(phone_alignments[b_idx1:b_idx2])
+            phone_alignments = matched_alignments
+            phone_scores = matched_scores
+
+            if len(phone_alignments) != len(phone_scores):
+                error_log.append(f"Alignment mismatch at file {filename}. {len(phone_alignments)} alignments but {len(phone_scores)} scores.")
+                error_log.append(f"{[item['label'] for item in phone_alignments]}\n{[item['phone'] for item in phone_scores]}")
+
+            human_scores = phone_scores
+            alignments = phone_alignments
+
+        elif granularity == "word":
+            if len(word_scores) != len(word_alignments):
+                raise Exception("Human word annotations cannot be aligned with word alignments.")
+            human_scores = word_scores
+            alignments = word_alignments
+        else:
+            raise Exception("Invalid granularity")
+        
         # get ppl_losses per token + timestamps
         losses_with_timestamps = get_per_token_losses(audio)["loss_with_timestamps"]
 
-        # align canonical phonemes and phone alignments
-        phone_alignments_labels = [item['label'] for item in phone_alignments]
-        phone_scores_labels = [item[0] for item in phone_scores]
-        matcher = SequenceMatcher(None, phone_scores_labels, phone_alignments_labels)
-        opcodes = matcher.get_opcodes()
-        has_error = False
-        matched_alignments = []
-        matched_scores = []
-        for tag, a_idx1, a_idx2, b_idx1, b_idx2 in opcodes:
-            if tag == "equal":
-                matched_scores.extend(phone_scores[a_idx1:a_idx2])
-                matched_alignments.extend(phone_alignments[b_idx1:b_idx2])
-        phone_alignments = matched_alignments
-        phone_scores = matched_scores
-
-        if len(phone_alignments) != len(phone_scores):
-            error_log.append(f"Alignment mismatch at file {filename}. {len(phone_alignments)} alignments but {len(phone_scores)} scores.")
-            error_log.append(f"{[item['label'] for item in phone_alignments]}\n{[item[0] for item in phone_scores]}")
-
         # aggregate
-        for i in range(0, len(phone_alignments)):
-            current_phone = phone_alignments[i]
+        for i in range(0, len(alignments)):
+            current_alignment = alignments[i]
 
-            p_start = current_phone["start"]
-            p_end = current_phone["end"]
-            phone_losses = []
+            a_start = current_alignment["start"]
+            a_end = current_alignment["end"]
+            losses = []
 
             for loss_item in losses_with_timestamps:
                 t_start = loss_item[1]
                 t_end = loss_item[2]
-                if is_overlapping(p_start, p_end, t_start, t_end):
-                    phone_losses.append(loss_item[0])
+                if is_overlapping(a_start, a_end, t_start, t_end):
+                    losses.append(loss_item[0])
             
             # pooling
-            phone_loss_pooled = np.nan
+            loss_pooled = np.nan
             
             if pooling == "mean":
-                phone_loss_pooled = np.mean(phone_losses) if len(phone_losses) > 0 else np.nan
+                loss_pooled = np.mean(losses) if len(losses) > 0 else np.nan
             elif pooling == "max":
-                phone_loss_pooled = np.max(phone_losses) if len(phone_losses) > 0 else np.nan
+                loss_pooled = np.max(losses) if len(losses) > 0 else np.nan
             elif pooling == "std":
-                phone_loss_pooled = np.std(phone_losses) if len(phone_losses) > 1 else np.nan
+                loss_pooled = np.std(losses) if len(losses) > 1 else np.nan
             else:
                 raise Exception("No pooling method specified.")
             
-            if np.isnan(phone_loss_pooled):
+            if np.isnan(loss_pooled):
                 nan_count += 1
 
             utterance_ppl_info.append({
                 "speaker" : speaker,
                 "filename" : filename,
-                "phone" : current_phone['label'],
-                "phone_ppl_loss" : phone_loss_pooled,
-                "phone_human_score": phone_scores[i][1]
+                "label" : current_alignment['label'],
+                "ppl_loss" : loss_pooled,
+                "human_score": human_scores[i]['accuracy']
             })
 
-        if len(phone_alignments) != len(utterance_ppl_info):
+        if len(allignments) != len(utterance_ppl_info):
             error_log.append(f"[LOSS/ALIGNMENT MISMATCH] Phone segmentation does not match at file {filename}. {len(phone_alignments)} phone alignments but {len(ppl_info)} losses") 
         
         ppl_info += utterance_ppl_info
@@ -427,9 +453,9 @@ if __name__ == "__main__":
 
     # calculate losses
 
-    GRANULARITY = "phone"
+    GRANULARITY = "word"
     NORM = False
-
+    
     for pool in ["mean", "max", "std"]:
         results = get_losses(
             dataset=processed_dataset, 
@@ -448,8 +474,8 @@ if __name__ == "__main__":
         df = pd.DataFrame(ppl_results)
         df.dropna(axis=0, inplace=True)
 
-        x = df["phone_ppl_loss"]
-        y = df["phone_human_score"]
+        x = df["ppl_loss"]
+        y = df["human_score"]
         pcc = scipy.stats.pearsonr(x, y)
 
         # Record in CSV
