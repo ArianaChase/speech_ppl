@@ -1,107 +1,65 @@
-import os
-import csv
-import random
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
 import torchaudio
-import logging
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 import argparse
-import json
+import os
 import scipy.stats
-from omegaconf import OmegaConf
-from fairseq import utils
+from transformers import AutoModelForCausalLM
+from textless.vocoders.hifigan.vocoder import CodeHiFiGANVocoder
 from textless.data.speech_encoder import SpeechEncoder
-from textless.vocoders.tacotron2.vocoder import TacotronVocoder
-from sampler import UnitLanguageModelSampler
 import time
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler
+import csv 
+import pandas as pd
+import json 
 from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
 from operator import itemgetter
 import gspread
 from google.oauth2.service_account import Credentials
 from difflib import SequenceMatcher
+
+start_time = time.time()
+
+MODEL_TYPE="TWIST"
+MODEL_NAME="TWIST-1.3B"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-start_time = time.time()
-
-log_format = "[%(asctime)s] [%(levelname)s]: %(message)s"
-logging.basicConfig(format=log_format, level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-print(torch.cuda.is_available())  # True if a GPU is detected
-print(torch.cuda.device_count())  # Number of GPUs
-print(torch.cuda.current_device())  # Index of the current device
-print(torch.cuda.get_device_name(0))  # Name of GPU 0
-
-MODEL_TYPE="GSLM"
-MODEL_NAME="GSLM"
-GSLM_INPUT_SAMPLE_RATE = 16000
-FIELDNAMES = ["filename", "speaker", "ppl_loss", "human_annotated_accuracy"]
-
-class GslmSpeechPplWrapper:
+class TwistSpeechPPLWrapper:
     def __init__(
-        self, 
-        language_model_dir: str,
-        seed: int = None,
-        temperature: float = 0.7,
-        vocab_size: int = 100,
-        device: str = "cpu",
+        self,
+        twist_model_pretrained_path,
+        dense_model="mhubert-base-25hz",
+        quantizer_model="kmeans",
+        vocab=500,
+        device=None,
     ):
-        logger.info("Initializing the GSLM pipeline.")
-        if seed is not None:
-            random.seed(seed)
-            np.random.seed(seed)
-            utils.set_torch_seed(seed)
-        self.input_sample_rate = GSLM_INPUT_SAMPLE_RATE
-        self.vocab_size = vocab_size
-        self.temperature = temperature
-        self.tokens_framerate = 0.02  # HuBERT framerate
-        self.max_length = 1000
-        self.trim_trailing_audio_frames = 200
-        self.sampling_kwargs = {
-            "temperature": self.temperature,
-            "sampling": True,
-            "beam": 1,
-            "prefix_size": -1,
-            "max_len_a": 0.0,
-            "max_len_b": self.max_length,
-        }
-        logger.info("... Loading the language model")
-        self.sampler = UnitLanguageModelSampler.from_pretrained(
-            language_model_dir,
-        )
-        logger.info("=> Done!")
-        logger.info("... Loading the encoder")
+        if device:
+            self.device = device
+        else:
+            self.device = torch.device("cpu")
 
-        self.speech_encoder = SpeechEncoder.by_name(
-            dense_model_name="hubert-base-ls960",
-            quantizer_model_name="kmeans",
-            vocab_size=vocab_size,
+        # Load speech encoder and vocoder
+        self.encoder = SpeechEncoder.by_name(
+            dense_model_name=dense_model,
+            quantizer_model_name=quantizer_model,
+            vocab_size=vocab,
+            deduplicate=False, # set to False but mannually deduplicate later if needed
             need_f0=False,
-            deduplicate=False, # set to False to mannually deduplicate later if needed
-            f0_normalizer=None,
-            f0_quantizer=None,
-        )
+            add_bos_eos=False,
+        ).eval().to(self.device)
 
-        # move to device and eval mode
-        self.device = device
-        self.speech_encoder = self.speech_encoder.to(self.device)
-        # self.sampler.model = self.sampler.model.to(self.device)
-        self.sampler = self.sampler.to(self.device) # make sure the sampler knows the device
-        logger.info(f"Sampler model device: {self.sampler.device}")
-        self.speech_encoder.eval()
-        self.sampler.model.eval()
-
-        logger.info("=> Done!")
-        logger.info("GSLM pipeline initialized!")
-
+        # build twist unit lm
+        self.twist_lm = AutoModelForCausalLM.from_pretrained(twist_model_pretrained_path).to(self.device) # this is a text LLM
+        self.twist_lm.eval()
+    
     @torch.no_grad()
     def get_per_token_losses(
         self,
@@ -115,33 +73,31 @@ class GslmSpeechPplWrapper:
                 raw_audio = torch.Tensor(raw_audio).to(self.device)
             else:
                 raw_audio = raw_audio.to(self.device)
-        
-        # turn two channeled audio into 1 channel (just one tensor)
+
         if raw_audio.ndim == 2:
             raw_audio = raw_audio.mean(0)
-        
-        # get audio units... tokenize, if you will
-        encoder_output = self.speech_encoder(raw_audio)
-        units = encoder_output['units']
-        
-        # perform deduplication [4,4,3,3,3,3,3,1,2,2...] -> [4,3,1,2]
-        input_ids, _durations = torch.unique_consecutive(units, return_counts=True) # return the durations of each token (how many copies)
-        input_ids = input_ids.unsqueeze(0)  # add batch dim (1, seq_len)
+
+        # get input ids for unit lm
+        units = self.encoder(raw_audio)['units']
+
+        # perform deduplication
+        input_ids, _durations = torch.unique_consecutive(units, return_counts=True)
+        input_ids = input_ids.unsqueeze(0) + self.twist_lm.config.offset # Speech vocab embeddings live behind the text embeddings, offset by a certain number. this is ensuring that the input ids are not clashing with pretrained text embeddings // (1, seq_len)
 
         # deal with durations and convert to seconds
+        FRAMERATE = 1 / 25
         token_ends_frames = torch.cumsum(_durations, dim=0) # [5, 3+5, 1+3+5, ...]
         token_starts_frames = token_ends_frames - _durations # [0, 5, 8, ...]
-        t_start = token_starts_frames * self.tokens_framerate  # seconds
-        t_end = token_ends_frames * self.tokens_framerate
-
-        # making training samples!!!
+        t_start = token_starts_frames * FRAMERATE  # seconds
+        t_end = token_ends_frames * FRAMERATE
+        
+        # prepare labels
         labels = input_ids.clone()
         labels[:, :-1] = input_ids[:, 1:].clone() # shift tokens to the left
         labels[:, -1] = -100  # don't predict the last token as it has no next token
 
-        # get unit language model logits (Hubert units)
-        logits = self.sampler.model(input_ids)[0] # raw predicted scores!! No softmax becaue cross_entropy does it
-        
+        # get unit lm logits
+        logits = self.twist_lm(input_ids)[0]
         logits_reshaped = logits.reshape(-1, logits.size(-1))
 
         # calcuate CE loss
@@ -162,14 +118,15 @@ class GslmSpeechPplWrapper:
             "loss_all_tokens": loss_all_tokens,
             "loss_with_timestamps": loss_with_timestamps
         }
-    
-def create_csv_file(output_dir, name): # gslm_001
+
+def create_csv_file(output_dir, name):
     filename = '%s/%s' % (output_dir, name)
 
     print("Creating csv with file name: ", filename, " ...")
 
     with open(filename, mode="w") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=FIELDNAMES)
+        fieldnames = ["Speaker", "Audio filename", "Raw Mean of Per Token Losses", "Human Annotation (Accuracy)", "Human Annotation (Fluency)", "Human Annotation (Prosody)", "Human Annotation (Completeness)"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
     
     return filename
@@ -389,22 +346,6 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         "results" : ppl_info,
         "nan_count" : nan_count
     }
-def parse_human_annotations(filename):
-    human_scores = {}
-    with open(filename) as json_data:
-        data = json.load(json_data)
-        for audio_file in data:
-            value = data[audio_file]
-            human_scores[audio_file] = {
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"],
-                "words" : value["words"],
-                "text" : value["text"]
-            }
-    return human_scores
 
 def append_to_sheet(
     row_data,
@@ -429,42 +370,51 @@ def append_to_sheet(
 
     print("Spreadsheet updated successfully.")
 
+def parse_human_annotations(filename):
+    human_scores = {}
+    with open(filename) as json_data:
+        data = json.load(json_data)
+        for audio_file in data:
+            value = data[audio_file]
+            human_scores[audio_file] = {
+                "filename" : audio_file,
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"],
+                "words" : value["words"],
+                "text" : value["text"]
+            }
+    return human_scores
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    #parser.add_argument("--testing_audio_fpath", type=str, default=None)
-    parser.add_argument("--name", type=str, required=True)
-    parser.add_argument("--dataset_dir", type=str, required=True)
-    parser.add_argument("--language_model_dir", type=str, required=True)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--test_only", action="store_true")
-    parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--labels_dir", type=str, required=True)
-    parser.add_argument("--index", type=int, required=True)
-    parser.add_argument("--category", type=str, required=True)
-    parser.add_argument("--model", type=str, required=True)
-    parser.add_argument("--alignments", type=str)
+    argparser = argparse.ArgumentParser(description="Twist Speech PPL Wrapper Test")
+    argparser.add_argument("--name", type=str, required=True)
+    argparser.add_argument("--language_model_dir", type=str, required=True, help="Path to pretrained twist model")
+    argparser.add_argument("--dataset_dir", type=str, required=True, help="Path to input dataset")
+    argparser.add_argument("--output_dir", type=str, required=True)
+    argparser.add_argument("--labels_dir", type=str, required=True)
+    argparser.add_argument("--device", type=str, default=None, help="Device to use, e.g., 'cpu' or 'cuda'")
+    argparser.add_argument("--index", type=int, required=True)
+    argparser.add_argument("--category", type=str, required=True)
+    argparser.add_argument("--model", type=str, required=True)
+    argparser.add_argument("--alignments", type=str)
 
-    args = parser.parse_args()
+    args = argparser.parse_args()
+
+    open('/home/u5504709/new_work/speech_ppl/src/twist/tools/error_log', 'w').close()
     
-    open('/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log', 'w').close()
-
-    # detect device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # create model
-    model = GslmSpeechPplWrapper(
-        language_model_dir=args.language_model_dir,
-        seed=None,
-        temperature=0.7,
-        vocab_size=100,
-        device=device,
+    # get device
+    device = args.device if args.device else "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    
+    # build model
+    model = TwistSpeechPPLWrapper(
+        twist_model_pretrained_path=args.language_model_dir,
+        device=device
     )
-
-    # info about the program
-    print(f"Language model: {MODEL_NAME}")
-    print(f"Model Input Sample Rate: {model.input_sample_rate}")
-    print(f"Device: {device}")
-
-    # function for localizing ppl function
+    
     def get_per_token_losses(
         audio_sample: torch.Tensor,
     ) -> dict:
@@ -487,7 +437,7 @@ if __name__ == "__main__":
 
     NORM = False
     
-    for granularity in ["phone", "word", "utterance"]:
+    for granularity in ["utterance"]:
         for pool in ["mean", "max", "std"]:
             results = get_losses(
                 dataset=processed_dataset, 
@@ -513,7 +463,6 @@ if __name__ == "__main__":
             # Record in CSV
             append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, NORM, pcc.statistic, "n/a", f"{nan_percent:2f}" + "%", len(df)])
 
-
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
 
@@ -523,3 +472,4 @@ if __name__ == "__main__":
     print(f"Date and time at completion: {finish_time}") 
     duration = time.time() - start_time
     print(f"Program '{args.name}' finished executing in {time.time() - start_time} seconds.")
+

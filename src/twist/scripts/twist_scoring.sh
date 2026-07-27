@@ -5,7 +5,7 @@ root_dir=/home/u5504709/new_work/speech_ppl
 cd $root_dir
 source $root_dir/venv/twist/.venv/bin/activate
 
-twist_pretrained_model_dir=$root_dir/work/pretrained_models/flow-slm/TWIST-1.3B
+twist_pretrained_model_dir=$root_dir/work/pretrained_models/twist/TWIST-1.3B
 data_sample_dir=$root_dir/work/data/samples
 twist_output_dir=$root_dir/work/outputs/twist
 category="Likelihood_Correlation"
@@ -21,7 +21,7 @@ echo $SETUPTOOLS_USE_DISTUTILS
 
 
 echo "Running twist_scoring..."
-python $root_dir/src/twist/tools/twist_scoring_aged.py \
+python $root_dir/src/twist/tools/twist_scoring_local.py \
 	--name $name \
     --language_model_dir $twist_pretrained_model_dir \
 	--dataset_dir $root_dir/speechocean762/WAVE \
@@ -32,3 +32,5 @@ python $root_dir/src/twist/tools/twist_scoring_aged.py \
 	--name $name \
 	--index $index \
 	--model $model \
+	--alignments $root_dir/src/mfa/phone_extraction.json \
+
