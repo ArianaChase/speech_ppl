@@ -21,6 +21,8 @@ from operator import itemgetter
 import gspread
 from google.oauth2.service_account import Credentials
 from difflib import SequenceMatcher
+import math
+from wordfreq import word_frequency
 
 start_time = time.time()
 
@@ -171,7 +173,7 @@ def process_speechocean(input_dataset):
             "spk_count" : spk_count - len(ignored_speakers)
         }
 
-def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm=False, limit=None):
+def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm=False, norm_dict=None, limit=None):
     '''
     dataset         : dataset object with speaker, filename, and path
     labels_dict     : dictionary of human annotated information, sorted by filename 
@@ -179,12 +181,16 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
     granularity     : phone/word/utterance level
     pooling         : pooling method (max/mean/std)
     norm            : normalization
+    norm_dict      : dict for normalization
     '''
     ppl_info = []
     file_count = 0
     error_log = []
     nan_count = 0
     lim = limit if limit != None else len(dataset)
+
+    if norm and norm_dict == None:
+        raise Exception("Must provide a phone dictionary for normalization.")
 
     with open(alignments_path, 'r') as f:
         alignment_list = json.load(f)
@@ -295,11 +301,45 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 if np.isnan(loss_pooled):
                     nan_count += 1
 
+                # normalization
+                if granularity == "phone":
+                    # z-score normalization
+                    phone_label = strip_stress(alignments[i]['label']) # type: ignore
+                    p_mean = norm_dict[phone_label]['mean'] # type: ignore
+                    p_std = norm_dict[phone_label]['std'] # type: ignore
+                    loss_pooled_norm = ((loss_pooled - p_mean) / p_std) if p_std > 0 else np.nan
+                else :
+                    word = alignments[i]['label']
+                    freq = word_frequency(word, 'en')
+                    neg_log_freq = -math.log(freq) if freq > 0 else np.nan  # guard against unknown words
+                    w_mean = None
+                    w_std = None
+
+                    for bucket, item in norm_dict.items():
+                        s = item['freq_range']
+                        clean_s = s.strip("()[]")
+                        left_str, right_str = clean_s.split(",")
+                        left = float(left_str)
+                        right = float(right_str)
+                        interval = pd.Interval(left, right, closed="right")
+
+                        if neg_log_freq in interval:
+                            w_mean = item['mean']
+                            w_std = item['std']
+
+                            error_log.append(f"{word} has entered bucket {bucket}, freq is {neg_log_freq}, range is {s}")
+
+                    if w_mean != None and w_std != None and w_std > 0:
+                        loss_pooled_norm = (loss_pooled - w_mean) / w_std
+                    else:
+                        loss_pooled_norm = np.nan
+
                 utterance_ppl_info.append({
                     "speaker" : speaker,
                     "filename" : filename,
                     "label" : current_alignment['label'],
                     "ppl_loss" : loss_pooled,
+                    "ppl_loss_norm" : loss_pooled_norm,
                     "human_score": human_scores[i]['accuracy']
                 })
 
@@ -435,34 +475,43 @@ if __name__ == "__main__":
 
     # calculate losses
 
-    NORM = False
-    
-    for granularity in ["utterance"]:
+    NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+        
+    for granularity in ["phone", "word"]:
         for pool in ["mean", "max", "std"]:
+            
+            with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
+                norm_dict = json.load(f)
+
             results = get_losses(
                 dataset=processed_dataset, 
                 labels_dict=human_scores, 
                 alignments_path=args.alignments, 
                 granularity=granularity,
                 pooling=pool,
-                norm=NORM,
-                limit=400,
+                norm_dict=norm_dict,
+                limit=None,
                 )
-        
+            
             ppl_results = results["results"]
             nan_percent = (results["nan_count"] / len(ppl_results)) * 100
             
             # correlate
             df = pd.DataFrame(ppl_results)
-            df.dropna(axis=0, inplace=True)
-
+            df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
             x = df["ppl_loss"]
             y = df["human_score"]
             pcc = scipy.stats.pearsonr(x, y)
 
-            # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, NORM, pcc.statistic, "n/a", f"{nan_percent:2f}" + "%", len(df)])
+            df_norm = pd.DataFrame(ppl_results)
+            df_norm.dropna(axis=0, inplace=True)
+            x_norm = df_norm["ppl_loss_norm"]
+            y_norm = df_norm["human_score"]
+            pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
 
+            # Record in CSV
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc_norm.statistic,  "n/a", f"{nan_percent:2f}" + "%", len(df)])
+    
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
 
