@@ -174,6 +174,7 @@ def process_alignments_ds(input_dataset):
         })
     
     return alignments
+
 def strip_stress(phone_label):
     if phone_label[-1].isdigit():
         return phone_label[:-1]
@@ -336,7 +337,7 @@ if __name__ == "__main__":
     GRANULARITY = "phone"
     result_dicts_path = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
 
-    for pool in ["std"]:
+    for pool in ["mean", "max"]:
         result_dict = get_losses(
             dataset=processed_dataset, 
             granularity=GRANULARITY,

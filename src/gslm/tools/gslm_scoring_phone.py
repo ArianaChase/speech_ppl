@@ -224,14 +224,13 @@ def process_speechocean(input_dataset):
 
 
     
-def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm=False, norm_dict=None, limit=None):
+def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm_dict=None, limit=None):
     '''
     dataset         : dataset object with speaker, filename, and path
     labels_dict     : dictionary of human annotated information, sorted by filename 
     alignments_path : json file of phone-level alignment boundaries
     granularity     : phone/word/utterance level
     pooling         : pooling method (max/mean/std)
-    norm            : normalization
     norm_dict      : dict for normalization
     '''
     ppl_info = []
@@ -240,13 +239,23 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
     nan_count = 0
     lim = limit if limit != None else len(dataset)
 
-    if norm and norm_dict == None:
-        raise Exception("Must provide a phone dictionary for normalization.")
 
     with open(alignments_path, 'r') as f:
         alignment_list = json.load(f)
 
-    pbar = tqdm(dataset)
+    dataset_cleaned = []
+
+    for sample in dataset:
+        for idx in range(len(alignment_list) -1, -1, -1):
+            if sample['filename'] == alignment_list[idx]['audio_id']:
+                dataset_cleaned.append(sample)
+            if alignment_list[idx]['speaker'] == '1076':
+                alignment_list.pop(idx)
+                
+    if len(dataset_cleaned) != len(alignment_list):
+        raise Exception(f"Length mismatch between alignments ({len(alignment_list)}) and dataset ({len(dataset_cleaned)})")
+
+    pbar = tqdm(dataset_cleaned)
     for sample in pbar:
         if file_count >= lim:
             break
@@ -537,7 +546,7 @@ if __name__ == "__main__":
     
     for granularity in ["phone", "word"]:
         for pool in ["mean", "max", "std"]:
-            
+
             with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
                 norm_dict = json.load(f)
 
@@ -548,7 +557,7 @@ if __name__ == "__main__":
                 granularity=granularity,
                 pooling=pool,
                 norm_dict=norm_dict,
-                limit=400,
+                limit=None,
                 )
             
             ppl_results = results["results"]
@@ -568,7 +577,7 @@ if __name__ == "__main__":
             pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
 
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc_norm.statistic,  "n/a", f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm.statistic, pcc_norm.pvalue, "n/a", f"{nan_percent:2f}" + "%", len(df)])
 
 
     print(f"Speaker count: {spk_count}")

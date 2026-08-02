@@ -18,7 +18,7 @@ name="taslm_scoring"
 nvidia-smi
 
 echo "Running TASTE scoring..."
-python $root_dir/src/taste/tools/taslm_scoring.py \
+python $root_dir/src/taste/tools/taslm_scoring_libri.py \
 	--name $name \
     --pretrained_model_dir $pretrained_model_dir \
     --testing_audio_fpath $data_sample_dir/speech.wav \
