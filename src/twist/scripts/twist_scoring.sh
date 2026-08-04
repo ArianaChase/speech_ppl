@@ -21,7 +21,7 @@ echo $SETUPTOOLS_USE_DISTUTILS
 
 
 echo "Running twist_scoring..."
-python $root_dir/src/twist/tools/twist_scoring_libri.py \
+python $root_dir/src/twist/tools/twist_scoring_local.py \
 	--name $name \
     --language_model_dir $twist_pretrained_model_dir \
 	--dataset_dir $root_dir/speechocean762/WAVE \

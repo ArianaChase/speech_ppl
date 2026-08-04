@@ -21,6 +21,7 @@ from google.oauth2.service_account import Credentials
 from wordfreq import word_frequency
 import math
 import os
+import re
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 start_time = time.time()
 
@@ -223,6 +224,10 @@ def process_speechocean(input_dataset):
             "spk_count" : spk_count - len(ignored_speakers)
         }
 
+def clean_transcript(text):
+    text = text.upper()  # normalize case
+    cleaned_text = re.sub(r'[^\w\s]', '', text)  # strip anything that's not a word char or whitespace
+    return cleaned_text
 
 def parse_human_annotations(filename):
     human_scores = {}
@@ -242,7 +247,7 @@ def parse_human_annotations(filename):
     return human_scores
 
 
-def get_losses(dataset, labels_dict, granularity, pooling, norm_dict=None, limit=None):
+def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm_dict=None, limit=None):
     '''
     dataset         : dataset object with speaker, filename, and path
     labels_dict     : dictionary of human annotated information, sorted by filename 
@@ -257,7 +262,23 @@ def get_losses(dataset, labels_dict, granularity, pooling, norm_dict=None, limit
     nan_count = 0
     lim = limit if limit != None else len(dataset)
 
-    pbar = tqdm(dataset)
+    dataset_cleaned = []
+
+    with open(alignments_path, 'r') as f:
+            alignment_list = json.load(f)
+        
+    
+    for sample in dataset:
+        for idx in range(len(alignment_list) -1, -1, -1):
+            if sample['filename'] == alignment_list[idx]['audio_id']:
+                dataset_cleaned.append(sample)
+            if alignment_list[idx]['speaker'] == '1076':
+                alignment_list.pop(idx)
+                
+    if len(dataset_cleaned) != len(alignment_list):
+        raise Exception(f"Length mismatch between alignments ({len(alignment_list)}) and dataset ({len(dataset_cleaned)})")
+
+    pbar = tqdm(dataset_cleaned)
 
     for sample in pbar:
         if file_count >= lim:
@@ -282,8 +303,8 @@ def get_losses(dataset, labels_dict, granularity, pooling, norm_dict=None, limit
                 text=human_annotation_obj['text']
             )
         per_word_losses = per_word_losses_result['per_word_losses']
-        operated_text = per_word_losses_result['text']
-        words = operated_text.split(' ')[1:]
+        operated_text = clean_transcript(per_word_losses_result['text'])
+        words = operated_text.split()
 
         print(f"WORDS: {words}")
 
@@ -296,6 +317,9 @@ def get_losses(dataset, labels_dict, granularity, pooling, norm_dict=None, limit
 
         # loss recording
         if granularity == "word":
+            if len(words) != len(per_word_losses):
+                error_log.append(f"At file {filename}, per_word_losses ({len(per_word_losses)}) do not line up with words ({len(words)}): words are {words}")
+                continue
             for idx in range(0, len(per_word_losses)):
                 loss = per_word_losses[idx].item()
 
@@ -476,10 +500,11 @@ if __name__ == "__main__":
     results = get_losses(
         dataset=processed_dataset, 
         labels_dict=human_scores, 
+        alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
         granularity="word",
         pooling=None,
         norm_dict=norm_dict,
-        limit=40,
+        limit=None,
         )
 
     print(results['results'][0])
@@ -517,6 +542,7 @@ if __name__ == "__main__":
         results = get_losses(
             dataset=processed_dataset, 
             labels_dict=human_scores, 
+            alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
             granularity="utterance",
             pooling=pool,
             norm_dict=None,

@@ -23,6 +23,7 @@ from google.oauth2.service_account import Credentials
 from difflib import SequenceMatcher
 import math
 from wordfreq import word_frequency
+from sklearn.metrics import roc_auc_score
 
 start_time = time.time()
 
@@ -139,6 +140,12 @@ def is_overlapping(a_start, a_end, b_start, b_end):
     else:
         return False
 
+def strip_stress(phone_label):
+    if phone_label[-1].isdigit():
+        return phone_label[:-1]
+    else:
+        return phone_label
+
 def process_speechocean(input_dataset):
 
         audio_file_info = []
@@ -191,9 +198,6 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
     with open(alignments_path, 'r') as f:
         alignment_list = json.load(f)
-
-    with open(alignments_path, 'r') as f:
-            alignment_list = json.load(f)
     
     dataset_cleaned = []
 
@@ -207,7 +211,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
     if len(dataset_cleaned) != len(alignment_list):
         raise Exception(f"Length mismatch between alignments ({len(alignment_list)}) and dataset ({len(dataset_cleaned)})")
 
-    pbar = tqdm(dataset)
+    pbar = tqdm(dataset_cleaned)
     for sample in pbar:
         if file_count >= lim:
             break
@@ -233,6 +237,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         phone_scores = []
         word_scores = []
         utterance_score = human_annotation_obj["accuracy"]
+        auc_threshold = None
 
         for word_obj in human_annotation_obj["words"]:
             for i in range(0, len(word_obj["phones"])):
@@ -269,14 +274,17 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
             human_scores = phone_scores
             alignments = phone_alignments
+            auc_threshold = 0.5
 
         elif granularity == "word":
             if len(word_scores) != len(word_alignments):
                 raise Exception("Human word annotations cannot be aligned with word alignments.")
             human_scores = word_scores
             alignments = word_alignments
+            auc_threshold = 3
         elif granularity == "utterance":
             human_scores = utterance_score
+            auc_threshold = 3
         else:
             raise Exception("Invalid granularity")
         
@@ -350,6 +358,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                     "speaker" : speaker,
                     "filename" : filename,
                     "label" : current_alignment['label'],
+                    "auc_label" : 1 if human_scores[i]['accuracy'] > auc_threshold else 0,
                     "ppl_loss" : loss_pooled,
                     "ppl_loss_norm" : loss_pooled_norm,
                     "human_score": human_scores[i]['accuracy']
@@ -382,6 +391,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 "speaker" : speaker,
                 "filename" : filename,
                 "label" : human_annotation_obj["text"],
+                "auc_label" : 1 if human_scores > auc_threshold else 0,
                 "ppl_loss" : loss_pooled,
                 "human_score": human_scores
             })
@@ -502,7 +512,7 @@ if __name__ == "__main__":
                 granularity=granularity,
                 pooling=pool,
                 norm_dict=norm_dict,
-                limit=None,
+                limit=200,
                 )
             
             ppl_results = results["results"]
@@ -515,14 +525,30 @@ if __name__ == "__main__":
             y = df["human_score"]
             pcc = scipy.stats.pearsonr(x, y)
 
+            # auc
+            y_score = df["ppl_loss"]
+            y_true = df["auc_label"]
+            if len(np.unique(y_true)) != 1:
+                auc = roc_auc_score(y_true, y_score)
+            else:
+                auc = "n/a"
+    
             df_norm = pd.DataFrame(ppl_results)
             df_norm.dropna(axis=0, inplace=True)
             x_norm = df_norm["ppl_loss_norm"]
             y_norm = df_norm["human_score"]
             pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
 
+            y_score_norm = df_norm["ppl_loss_norm"]
+            y_true_norm = df_norm["auc_label"]
+            if len(np.unique(y_true_norm)) != 1:
+                auc_norm = roc_auc_score(y_true_norm, y_score_norm)
+            else:
+                auc_norm = "n/a"
+                
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm.statistic, pcc_norm.pvalue, "n/a", f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm.statistic, pcc_norm.pvalue, auc, auc_norm, f"{nan_percent:2f}" + "%", len(df)])
+            
     
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
