@@ -393,6 +393,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 "label" : human_annotation_obj["text"],
                 "auc_label" : 1 if human_scores > auc_threshold else 0,
                 "ppl_loss" : loss_pooled,
+                "ppl_loss_norm" : np.nan,
                 "human_score": human_scores
             })
     
@@ -499,11 +500,14 @@ if __name__ == "__main__":
 
     NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
         
-    for granularity in ["phone", "word"]:
+    for granularity in ["phone", "word", "utterance"]:
         for pool in ["mean", "max", "std"]:
-            
-            with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
-                norm_dict = json.load(f)
+
+            if granularity == "phone" or granularity == "word":
+                with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
+                    norm_dict = json.load(f)
+            else:
+                norm_dict = None
 
             results = get_losses(
                 dataset=processed_dataset, 
@@ -512,7 +516,7 @@ if __name__ == "__main__":
                 granularity=granularity,
                 pooling=pool,
                 norm_dict=norm_dict,
-                limit=200,
+                limit=None,
                 )
             
             ppl_results = results["results"]
@@ -532,22 +536,30 @@ if __name__ == "__main__":
                 auc = roc_auc_score(y_true, y_score)
             else:
                 auc = "n/a"
-    
-            df_norm = pd.DataFrame(ppl_results)
-            df_norm.dropna(axis=0, inplace=True)
-            x_norm = df_norm["ppl_loss_norm"]
-            y_norm = df_norm["human_score"]
-            pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
 
-            y_score_norm = df_norm["ppl_loss_norm"]
-            y_true_norm = df_norm["auc_label"]
-            if len(np.unique(y_true_norm)) != 1:
-                auc_norm = roc_auc_score(y_true_norm, y_score_norm)
+            if granularity == "phone" or granularity == "word":
+                df_norm = pd.DataFrame(ppl_results)
+                df_norm.dropna(axis=0, inplace=True)
+                x_norm = df_norm["ppl_loss_norm"]
+                y_norm = df_norm["human_score"]
+                pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
+                pcc_norm_stats = pcc_norm.statistic
+                pcc_norm_pvalue = pcc_norm.pvalue
+
+                y_score_norm = df_norm["ppl_loss_norm"]
+                y_true_norm = df_norm["auc_label"]
+                if len(np.unique(y_true_norm)) != 1:
+                    auc_norm = roc_auc_score(y_true_norm, y_score_norm)
+                else:
+                    auc_norm = "n/a"
+            
             else:
+                pcc_norm_stats = "n/a"
+                pcc_norm_pvalue = "n/a"
                 auc_norm = "n/a"
                 
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm.statistic, pcc_norm.pvalue, auc, auc_norm, f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, f"{nan_percent:2f}" + "%", len(df)])
             
     
     print(f"Speaker count: {spk_count}")

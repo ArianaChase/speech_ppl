@@ -31706,3 +31706,21 @@ NOT has entered bucket 0, freq is 5.318520073865556, range is (2.923, 9.901]
 FIRST has entered bucket 0, freq is 6.653113060608557, range is (2.923, 9.901]
 PERSON has entered bucket 0, freq is 7.943392768488859, range is (2.923, 9.901]
 NOW has entered bucket 0, freq is 6.495645628155304, range is (2.923, 9.901]
+At file 096070023, loss tensor length does not align with operated text length
+At file 096070023, loss tensor length does not align with human word scores amt
+At file 096330012, loss tensor length does not align with human word scores amt
+At file 096470003, loss tensor length does not align with human word scores amt
+At file 096470012, loss tensor length does not align with human word scores amt
+At file 096490019, loss tensor length does not align with human word scores amt
+At file 096070023, loss tensor length does not align with operated text length
+At file 096070023, loss tensor length does not align with human word scores amt
+At file 096330012, loss tensor length does not align with human word scores amt
+At file 096470003, loss tensor length does not align with human word scores amt
+At file 096470012, loss tensor length does not align with human word scores amt
+At file 096490019, loss tensor length does not align with human word scores amt
+At file 096070023, loss tensor length does not align with operated text length
+At file 096070023, loss tensor length does not align with human word scores amt
+At file 096330012, loss tensor length does not align with human word scores amt
+At file 096470003, loss tensor length does not align with human word scores amt
+At file 096470012, loss tensor length does not align with human word scores amt
+At file 096490019, loss tensor length does not align with human word scores amt

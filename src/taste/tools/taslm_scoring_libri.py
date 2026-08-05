@@ -377,7 +377,7 @@ if __name__ == "__main__":
     # TODO: Implement bucketing here, then create a dictionary with only the buckets
 
     NUM_BUCKETS = 5
-
+    print(f"Words to be sorted: {len(result_dict)}")
     all_neg_log_freqs = [item['freq'] for word, item in result_dict.items()]
     nan_count = np.isnan(all_neg_log_freqs).sum()
     x_series = pd.Series(all_neg_log_freqs)

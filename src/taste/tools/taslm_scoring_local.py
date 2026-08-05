@@ -22,6 +22,7 @@ from wordfreq import word_frequency
 import math
 import os
 import re
+from sklearn.metrics import roc_auc_score
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 start_time = time.time()
 
@@ -305,6 +306,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         per_word_losses = per_word_losses_result['per_word_losses']
         operated_text = clean_transcript(per_word_losses_result['text'])
         words = operated_text.split()
+        auc_threshold = 3
 
         print(f"WORDS: {words}")
 
@@ -355,6 +357,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                     "speaker" : speaker,
                     "filename" : filename,
                     "label" : words[idx],
+                    "auc_label" : 1 if human_annotation_obj['words'][idx]['accuracy'] > auc_threshold else 0,
                     "ppl_loss" : loss,
                     "ppl_loss_norm" : loss_norm,
                     "human_score": human_annotation_obj['words'][idx]['accuracy']
@@ -381,6 +384,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 "speaker" : speaker,
                 "filename" : filename,
                 "label" : operated_text,
+                "auc_label" : 1 if human_annotation_obj['accuracy'] > auc_threshold else 0,
                 "ppl_loss" : loss_pooled,
                 "ppl_loss_norm" : None,
                 "human_score": human_annotation_obj['accuracy']
@@ -423,38 +427,106 @@ def append_to_sheet(
 
     print("Spreadsheet updated successfully.")
 
+def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=None):
+    with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_word_none_norm.json", "r") as f:
+        norm_dict = json.load(f)
+
+    results = get_losses(
+        dataset=processed_dataset, 
+        labels_dict=human_scores, 
+        alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
+        granularity="word",
+        pooling=None,
+        norm_dict=norm_dict,
+        limit=limit,
+        )
+
+    print(results['results'][0])
+    ppl_results = results["results"]
+    
+    # correlate
+    df = pd.DataFrame(ppl_results)
+    df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
+    x = df["ppl_loss"]
+    y = df["human_score"]
+
+    pcc_result = scipy.stats.pearsonr(x, y)
+    pcc_stats = pcc_result.statistic
+    pcc_pvalue = pcc_result.pvalue
+
+    y_score = df["ppl_loss"]
+    y_true = df["auc_label"]
+    if len(np.unique(y_true)) != 1:
+        auc = roc_auc_score(y_true, y_score)
+    else:
+        auc = "n/a"
+
+    df_norm = pd.DataFrame(ppl_results)
+    df_norm.dropna(axis=0, inplace=True)
+    x_norm = df_norm["ppl_loss_norm"]
+    y_norm = df_norm["human_score"]
+
+    y_score = df_norm["ppl_loss_norm"]
+    y_true = df_norm["auc_label"]
+    if len(np.unique(y_true)) != 1:
+        auc_norm = roc_auc_score(y_true, y_score)
+    else:
+        auc_norm = "n/a"
+
+    if len(x_norm) > 2 and len(y_norm) > 2:
+        pcc_norm_result = scipy.stats.pearsonr(x, y)
+        pcc_norm_stats = pcc_norm_result.statistic
+        pcc_norm_pvalue = pcc_norm_result.pvalue
+    else:
+        pcc_norm_stats = "n/a"
+        pcc_norm_pvalue = "n/a"
+    
+    # Record in CSV
+    append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, "n/a", len(df)])
+
+def utterance_level_operation(processed_dataset, human_scores, limit=None):
+    for pool in ["mean", "max", "std"]:
+        results = get_losses(
+            dataset=processed_dataset, 
+            labels_dict=human_scores, 
+            alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
+            granularity="utterance",
+            pooling=pool,
+            norm_dict=None,
+            limit=limit,
+            )
+
+        print(results['results'][0])
+        ppl_results = results["results"]
+        nan_percent = (results["nan_count"] / len(ppl_results)) * 100
+
+        # correlate
+        df = pd.DataFrame(ppl_results)
+        df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
+        x = df["ppl_loss"]
+        y = df["human_score"]
+
+        y_score = df["ppl_loss"]
+        y_true = df["auc_label"]
+        if len(np.unique(y_true)) != 1:
+            auc = roc_auc_score(y_true, y_score)
+        else:
+            auc = "n/a"
+
+        pcc_result = scipy.stats.pearsonr(x, y)
+        pcc_stats = pcc_result.statistic
+        pcc_pvalue = pcc_result.pvalue
+
+        # Record in CSV
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, "utterance", pool, pcc_stats, pcc_pvalue, "n/a", "n/a", auc, "n/a", f"{nan_percent:2f}%", len(df)])
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--pretrained_model_dir",
-        type=str,
-        required=True,
-        help="Path to the pretrained TASLM model directory.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        required=True,
-        help="Directory to save the results.",
-    )
-    parser.add_argument(
-        "--testing_audio_fpath",
-        type=str,
-        required=False,
-        help="Path to an audio file for testing. If set, the script will conduct simple test using the file.",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help="Device to run the model on.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility.",
-    )
+    parser.add_argument("--pretrained_model_dir", type=str, required=True, help="Path to the pretrained TASLM model directory.",)
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the results.",)
+    parser.add_argument("--testing_audio_fpath", type=str, required=False, help="Path to an audio file for testing. If set, the script will conduct simple test using the file.",)
+    parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on.",)
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--labels_dir", type=str, required=True)
     parser.add_argument("--dataset_dir", type=str, required=True)
     parser.add_argument("--name", type=str, required=True)
@@ -492,79 +564,13 @@ if __name__ == "__main__":
     print(f"Processed {len(processed_dataset)} samples.")
 
     NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+    LIMIT = None
 
     # ============= word-level =================   
-    with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_word_none_norm.json", "r") as f:
-        norm_dict = json.load(f)
-
-    results = get_losses(
-        dataset=processed_dataset, 
-        labels_dict=human_scores, 
-        alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
-        granularity="word",
-        pooling=None,
-        norm_dict=norm_dict,
-        limit=None,
-        )
-
-    print(results['results'][0])
-    ppl_results = results["results"]
+    word_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, NORM_DICT_DIR=NORM_DICT_DIR, limit=LIMIT)
     
-    # correlate
-    df = pd.DataFrame(ppl_results)
-    df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
-    x = df["ppl_loss"]
-    y = df["human_score"]
-
-    pcc_result = scipy.stats.pearsonr(x, y)
-    pcc_stats = pcc_result.statistic
-    pcc_pvalue = pcc_result.pvalue
-
-    df_norm = pd.DataFrame(ppl_results)
-    df_norm.dropna(axis=0, inplace=True)
-    x_norm = df_norm["ppl_loss_norm"]
-    y_norm = df_norm["human_score"]
-
-    if len(x_norm) > 2 and len(y_norm) > 2:
-        pcc_norm_result = scipy.stats.pearsonr(x, y)
-        pcc_norm_stats = pcc_result.statistic
-        pcc_norm_pvalue = pcc_result.pvalue
-    else:
-        pcc_norm_stats = "n/a"
-        pcc_norm_pvalue = "n/a"
-    
-    # Record in CSV
-    append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, "n/a", "n/a", len(df)])
-
     # ======= utterance-level ===========
-
-    for pool in ["mean", "max", "std"]:
-        results = get_losses(
-            dataset=processed_dataset, 
-            labels_dict=human_scores, 
-            alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
-            granularity="utterance",
-            pooling=pool,
-            norm_dict=None,
-            limit=40,
-            )
-
-        print(results['results'][0])
-        ppl_results = results["results"]
-        nan_percent = (results["nan_count"] / len(ppl_results)) * 100
-
-        # correlate
-        df = pd.DataFrame(ppl_results)
-        df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
-        x = df["ppl_loss"]
-        y = df["human_score"]
-
-        pcc_result = scipy.stats.pearsonr(x, y)
-        pcc_stats = pcc_result.statistic
-        pcc_pvalue = pcc_result.pvalue
-
-        # Record in CSV
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, "utterance", pool, pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, "n/a", f"{nan_percent:2f}%", len(df)])
+    utterance_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, limit=LIMIT)
         
     # Capture and format the finish time 
     now = datetime.now() 

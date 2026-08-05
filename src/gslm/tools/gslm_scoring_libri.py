@@ -393,7 +393,7 @@ if __name__ == "__main__":
     GRANULARITY = "word"
     result_dicts_path = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
 
-    for pool in ["std"]:
+    for pool in ["mean", "max"]:
         result_dict = get_losses(
             dataset=processed_dataset, 
             granularity=GRANULARITY,
@@ -423,6 +423,7 @@ if __name__ == "__main__":
 
             NUM_BUCKETS = 5
 
+            print(f"Words to be sorted: {len(result_dict)}")
             all_neg_log_freqs = [item['freq'] for word, item in result_dict.items()]
             nan_count = np.isnan(all_neg_log_freqs).sum()
             x_series = pd.Series(all_neg_log_freqs)

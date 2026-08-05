@@ -20,8 +20,7 @@ mkdir -p $gslm_output_dir
 export CUDA_VISIBLE_DEVICES=0
 
 echo "Running gslm_scoring..."
-python $root_dir/src/gslm/tools/gslm_scoring.py --help 
-python $root_dir/src/gslm/tools/gslm_scoring_phone.py \
+python $root_dir/src/gslm/tools/gslm_scoring_libri.py \
 	--name $name \
 	--dataset_dir $root_dir/speechocean762/WAVE/ \
     --language_model_dir $pretrained_model_dir/gslm/hubert100_lm \
