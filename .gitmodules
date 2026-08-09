@@ -6,7 +6,7 @@
 	url = git@github.com:andybi7676/TASTE-SpokenLM.git
 [submodule "flow-slm"]
 	path = flow-slm
-	url = https://github.com/jjery2243542/flow-slm
+	url = https://github.com/ArianaChase/edited_flow-slm
 [submodule "moshi"]
 	path = moshi
 	url = https://github.com/kyutai-labs/moshi
