@@ -113,8 +113,8 @@ class TwistSpeechPPLWrapper:
 
         # merge duration info
         loss_with_timestamps = []
-        for i in range(0, len(loss_all_tokens)):
-            loss_with_timestamps.append((loss_all_tokens[i].item(), t_start[i].item(), t_end[i].item()))
+        for i in range(0, len(loss_all_tokens) - 1): # don't consider the EOS
+            loss_with_timestamps.append((loss_all_tokens[i].item(), t_start[i+1].item(), t_end[i+1].item()))
         
         return {
             "logits": logits,

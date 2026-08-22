@@ -113,8 +113,8 @@ class TwistSpeechPPLWrapper:
 
         # merge duration info
         loss_with_timestamps = []
-        for i in range(0, len(loss_all_tokens)):
-            loss_with_timestamps.append((loss_all_tokens[i].item(), t_start[i].item(), t_end[i].item()))
+        for i in range(0, len(loss_all_tokens) - 1): # don't consider the EOS
+            loss_with_timestamps.append((loss_all_tokens[i].item(), t_start[i+1].item(), t_end[i+1].item()))
         
         return {
             "logits": logits,
@@ -359,8 +359,8 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                     "filename" : filename,
                     "label" : current_alignment['label'],
                     "auc_label" : 1 if human_scores[i]['accuracy'] > auc_threshold else 0,
-                    "ppl_loss" : loss_pooled,
-                    "ppl_loss_norm" : loss_pooled_norm,
+                    "ppl_loss" : -loss_pooled,
+                    "ppl_loss_norm" : -loss_pooled_norm,
                     "human_score": human_scores[i]['accuracy']
                 })
 
@@ -392,7 +392,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 "filename" : filename,
                 "label" : human_annotation_obj["text"],
                 "auc_label" : 1 if human_scores > auc_threshold else 0,
-                "ppl_loss" : loss_pooled,
+                "ppl_loss" : -loss_pooled,
                 "ppl_loss_norm" : np.nan,
                 "human_score": human_scores
             })
@@ -450,6 +450,49 @@ def parse_human_annotations(filename):
             }
     return human_scores
 
+def per_phone_auc(results):
+
+    phone_auc_dict = {}
+
+    for result in results:
+        if result['label'] not in list(phone_auc_dict.keys()):
+            phone_auc_dict[result['label']] = {
+                'auc_labels' : [result['auc_label']],
+                'ppl_losses' : [result['ppl_loss']],
+                'ppl_norm_losses' : [result['ppl_loss_norm']],
+            }
+        else:
+            phone_auc_dict[result['label']]['auc_labels'].append(result['auc_label'])
+            phone_auc_dict[result['label']]['ppl_losses'].append(result['ppl_loss'])
+            phone_auc_dict[result['label']]['ppl_norm_losses'].append(result['ppl_loss_norm'])
+    
+    roc_auc_scores = []
+    roc_auc_scores_norm = []
+
+    for phone, item in phone_auc_dict.items():
+        df = pd.DataFrame(item)
+        df = df.dropna(axis=0, subset=['ppl_losses', 'auc_labels'])
+
+        y_true = df['auc_labels']
+        y_score = df['ppl_losses']
+
+        if len(np.unique(y_true)) != 1 and len(y_score) >= 1:
+            auc = roc_auc_score(y_true, y_score)
+            roc_auc_scores.append(auc)
+
+        df = pd.DataFrame(item)
+        df = df.dropna(axis=0, subset=['ppl_norm_losses', 'auc_labels'])
+        y_true_norm = df['auc_labels']
+        y_score_norm = df['ppl_norm_losses']
+
+        if len(np.unique(y_true_norm)) != 1 and len(y_score_norm) >= 1:
+            auc = roc_auc_score(y_true_norm, y_score_norm) # because 0 - 1 is akin to big loss - small loss
+            roc_auc_scores_norm.append(auc)
+
+    return {
+        'auc' : np.nanmean(roc_auc_scores) if len(roc_auc_scores) >= 1 else "n/a",
+        'auc_norm' : np.nanmean(roc_auc_scores_norm) if len(roc_auc_scores_norm) >= 1 else "n/a"
+    }
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Twist Speech PPL Wrapper Test")
@@ -558,10 +601,16 @@ if __name__ == "__main__":
                 pcc_norm_pvalue = "n/a"
                 auc_norm = "n/a"
                 
+            if granularity == "phone":
+                per_phone_auc_result = per_phone_auc(ppl_results)
+            else:
+                per_phone_auc_result = {
+                    "auc" : "n/a",
+                    "auc_norm" : "n/a"
+                }
+                
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, f"{nan_percent:2f}" + "%", len(df)])
-            
-    
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
 
