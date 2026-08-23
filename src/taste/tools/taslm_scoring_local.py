@@ -427,10 +427,12 @@ def append_to_sheet(
 
     print("Spreadsheet updated successfully.")
 
-def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=None):
+def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=None, output_dir=None):
     with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_word_none_norm.json", "r") as f:
         norm_dict = json.load(f)
 
+    csv_path = f"{output_dir}/{MODEL_TYPE}_{MODEL_NAME}_word_none_losses.csv"
+    
     results = get_losses(
         dataset=processed_dataset, 
         labels_dict=human_scores, 
@@ -443,6 +445,12 @@ def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=N
 
     print(results['results'][0])
     ppl_results = results["results"]
+
+    with open(csv_path, "w") as f:
+        fieldnames = ppl_results[0].keys()
+        dict_writer = csv.DictWriter(f, fieldnames)
+        dict_writer.writeheader()
+        dict_writer.writerows(ppl_results)
     
     # correlate
     df = pd.DataFrame(ppl_results)
@@ -484,8 +492,12 @@ def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=N
     # Record in CSV
     append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, "n/a", len(df)])
 
-def utterance_level_operation(processed_dataset, human_scores, limit=None):
+def utterance_level_operation(processed_dataset, human_scores, limit=None, output_dir=None):
+
+    
     for pool in ["mean", "max", "std"]:
+        csv_path = f"{output_dir}/{MODEL_TYPE}_{MODEL_NAME}_utterance_none_losses.csv"
+
         results = get_losses(
             dataset=processed_dataset, 
             labels_dict=human_scores, 
@@ -499,6 +511,12 @@ def utterance_level_operation(processed_dataset, human_scores, limit=None):
         print(results['results'][0])
         ppl_results = results["results"]
         nan_percent = (results["nan_count"] / len(ppl_results)) * 100
+
+        with open(csv_path, "w") as f:
+            fieldnames = ppl_results[0].keys()
+            dict_writer = csv.DictWriter(f, fieldnames)
+            dict_writer.writeheader()
+            dict_writer.writerows(ppl_results)
 
         # correlate
         df = pd.DataFrame(ppl_results)
@@ -564,13 +582,14 @@ if __name__ == "__main__":
     print(f"Processed {len(processed_dataset)} samples.")
 
     NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+    OUTPUT_DIR = args.output_dir
     LIMIT = None
 
     # ============= word-level =================   
-    word_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, NORM_DICT_DIR=NORM_DICT_DIR, limit=LIMIT)
+    word_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, NORM_DICT_DIR=NORM_DICT_DIR, limit=LIMIT, output_dir=OUTPUT_DIR)
     
     # ======= utterance-level ===========
-    utterance_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, limit=LIMIT)
+    utterance_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, limit=LIMIT, output_dir=OUTPUT_DIR)
         
     # Capture and format the finish time 
     now = datetime.now() 

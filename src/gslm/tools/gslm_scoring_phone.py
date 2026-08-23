@@ -46,7 +46,6 @@ print(torch.cuda.get_device_name(0))  # Name of GPU 0
 MODEL_TYPE="GSLM"
 MODEL_NAME="GSLM"
 GSLM_INPUT_SAMPLE_RATE = 16000
-FIELDNAMES = ["filename", "speaker", "ppl_loss", "human_annotated_accuracy"]
 
 class GslmSpeechPplWrapper:
     def __init__(
@@ -170,17 +169,6 @@ class GslmSpeechPplWrapper:
             "loss_all_tokens": loss_all_tokens,
             "loss_with_timestamps": loss_with_timestamps
         }
-    
-def create_csv_file(output_dir, name): # gslm_001
-    filename = '%s/%s' % (output_dir, name)
-
-    print("Creating csv with file name: ", filename, " ...")
-
-    with open(filename, mode="w") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=FIELDNAMES)
-        writer.writeheader()
-    
-    return filename
 
 def is_overlapping(a_start, a_end, b_start, b_end):
     if (a_end >= b_start and a_start <= b_end):
@@ -599,9 +587,12 @@ if __name__ == "__main__":
     # calculate losses
 
     NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
-        
+    OUTPUT_DIR = args.output_dir
+    
     for granularity in ["phone", "word"]:
         for pool in ["mean", "max", "std"]:
+
+            csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{granularity}_{pool}_losses.csv"
 
             if granularity == "phone" or granularity == "word":
                 with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
@@ -616,11 +607,17 @@ if __name__ == "__main__":
                 granularity=granularity,
                 pooling=pool,
                 norm_dict=norm_dict,
-                limit=None,
+                limit=20,
                 )
             
             ppl_results = results["results"]
             nan_percent = (results["nan_count"] / len(ppl_results)) * 100
+
+            with open(csv_path, "w") as f:
+                fieldnames = ppl_results[0].keys()
+                dict_writer = csv.DictWriter(f, fieldnames)
+                dict_writer.writeheader()
+                dict_writer.writerows(ppl_results)
             
             # correlate
             df = pd.DataFrame(ppl_results)
@@ -667,7 +664,7 @@ if __name__ == "__main__":
                 }
                 
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
+            #append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
             
     
     print(f"Speaker count: {spk_count}")
