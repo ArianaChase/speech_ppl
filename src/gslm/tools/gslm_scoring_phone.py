@@ -411,7 +411,6 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                     "ppl_loss" : -loss_pooled,
                     "ppl_loss_norm" : -loss_pooled_norm,
                     "human_score": human_scores[i]['accuracy']
-                    
                 })
         else:
             losses = []
