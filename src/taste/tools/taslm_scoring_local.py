@@ -358,8 +358,8 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                     "filename" : filename,
                     "label" : words[idx],
                     "auc_label" : 1 if human_annotation_obj['words'][idx]['accuracy'] > auc_threshold else 0,
-                    "ppl_loss" : loss,
-                    "ppl_loss_norm" : loss_norm,
+                    "ppl_loss" : -loss,
+                    "ppl_loss_norm" : -loss_norm,
                     "human_score": human_annotation_obj['words'][idx]['accuracy']
                 })
 
@@ -385,7 +385,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
                 "filename" : filename,
                 "label" : operated_text,
                 "auc_label" : 1 if human_annotation_obj['accuracy'] > auc_threshold else 0,
-                "ppl_loss" : loss_pooled,
+                "ppl_loss" : -loss_pooled,
                 "ppl_loss_norm" : None,
                 "human_score": human_annotation_obj['accuracy']
             })
