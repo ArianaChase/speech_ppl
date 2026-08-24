@@ -664,7 +664,7 @@ if __name__ == "__main__":
                 }
                 
             # Record in CSV
-            #append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
             
     
     print(f"Speaker count: {spk_count}")

@@ -20,7 +20,8 @@ pretrained_models/
 src/taste/tools/error_log
 src/gslm/tools/result_dicts/GSLM_*norm.json
 src/gslm/tools/result_dicts/TWIST_*norm.json
-
+nvidia-bug-report.log.gz
+nvidia-driver-local-repo-ubuntu2204-580.178.04_1.0-1_amd64.deb
 
 
 # Byte-compiled / optimized / DLL files
