@@ -436,7 +436,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         ppl_info += utterance_ppl_info
         file_count += 1
 
-    with open("/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log", "a") as f:
+    with open(f"{args.root_dir}/src/gslm/tools/error_log", "a") as f:
         for i in error_log:
             f.write(i)
             f.write("\n")
@@ -465,9 +465,9 @@ def parse_human_annotations(filename):
 
 def append_to_sheet(
     row_data,
+    service_account_file,
     spreadsheet_name="ICASSP 2026 Experiment Results",
     worksheet_name="main",
-    service_account_file="/home/u5504709/new_work/speech_ppl/src/service_account.json"
 ):
     # Authenticate
     creds = Credentials.from_service_account_file(
@@ -540,14 +540,11 @@ if __name__ == "__main__":
     parser.add_argument("--test_only", action="store_true")
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--labels_dir", type=str, required=True)
-    parser.add_argument("--index", type=int, required=True)
-    parser.add_argument("--category", type=str, required=True)
-    parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--alignments", type=str)
-
+    parser.add_argument("--root_dir", type=str, required=True)
     args = parser.parse_args()
     
-    open('/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log', 'w').close()
+    open(f'{args.root_dir}/src/gslm/tools/error_log', 'w').close()
 
     # detect device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -586,7 +583,8 @@ if __name__ == "__main__":
 
     # calculate losses
 
-    NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+    NORM_DICT_DIR = f"{args.root_dir}/src/gslm/tools/result_dicts"
+    SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
     OUTPUT_DIR = args.output_dir
     
     for granularity in ["phone", "word"]:
@@ -664,7 +662,7 @@ if __name__ == "__main__":
                 }
                 
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)], SERVICE_ACCOUNT)
             
     
     print(f"Speaker count: {spk_count}")

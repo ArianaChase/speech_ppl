@@ -400,7 +400,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         ppl_info += utterance_ppl_info
         file_count += 1
 
-    with open("/home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log", "a") as f:
+    with open(f"{args.root_dir}/src/gslm/tools/error_log", "a") as f:
         for i in error_log:
             f.write(i)
             f.write("\n")
@@ -412,9 +412,9 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
 def append_to_sheet(
     row_data,
+    service_account_file,
     spreadsheet_name="ICASSP 2026 Experiment Results",
     worksheet_name="main",
-    service_account_file="/home/u5504709/new_work/speech_ppl/src/service_account.json"
 ):
     # Authenticate
     creds = Credentials.from_service_account_file(
@@ -502,14 +502,12 @@ if __name__ == "__main__":
     argparser.add_argument("--output_dir", type=str, required=True)
     argparser.add_argument("--labels_dir", type=str, required=True)
     argparser.add_argument("--device", type=str, default=None, help="Device to use, e.g., 'cpu' or 'cuda'")
-    argparser.add_argument("--index", type=int, required=True)
-    argparser.add_argument("--category", type=str, required=True)
-    argparser.add_argument("--model", type=str, required=True)
     argparser.add_argument("--alignments", type=str)
+    argparser.add_argument("--root_dir", type=str)
 
     args = argparser.parse_args()
 
-    open('/home/u5504709/new_work/speech_ppl/src/twist/tools/error_log', 'w').close()
+    open(f'{args.root_dir}/src/twist/tools/error_log', 'w').close()
     
     # get device
     device = args.device if args.device else "cuda" if torch.cuda.is_available() else "cpu"
@@ -541,10 +539,11 @@ if __name__ == "__main__":
 
     # calculate losses
 
-    NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+    NORM_DICT_DIR = f"{args.root_dir}/src/gslm/tools/result_dicts"
+    SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
     OUTPUT_DIR = args.output_dir
 
-    for granularity in ["phone", "word", "utterance"]:
+    for granularity in ["word", "utterance"]:
         for pool in ["mean", "max", "std"]:
 
             csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{granularity}_{pool}_losses.csv"
@@ -562,7 +561,7 @@ if __name__ == "__main__":
                 granularity=granularity,
                 pooling=pool,
                 norm_dict=norm_dict,
-                limit=None,
+                limit=10,
                 )
             
             ppl_results = results["results"]
@@ -619,7 +618,7 @@ if __name__ == "__main__":
                 }
                 
             # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)])
+            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)], SERVICE_ACCOUNT)
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
 

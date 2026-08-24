@@ -1,7 +1,7 @@
 set -e 
 
 echo "Activating virtual environment..."
-root_dir=~/new_work/speech_ppl
+root_dir=~/speech_ppl
 cd $root_dir
 source $root_dir/venv/taste/.venv/bin/activate
 
@@ -26,3 +26,4 @@ python $root_dir/src/taste/tools/taslm_scoring_local.py \
     --device $device \
     --dataset_dir $root_dir/speechocean762/WAVE \
     --labels_dir $root_dir/speechocean762/resource/scores.json \
+    --root_dir $root_dir \

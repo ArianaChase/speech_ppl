@@ -394,7 +394,7 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
         file_count += 1
             
-    with open("/home/u5504709/new_work/speech_ppl/src/taste/tools/error_log", "a") as f:
+    with open(f"{args.root_dir}/src/taste/tools/error_log", "a") as f:
         for i in error_log:
             f.write(i)
             f.write("\n")
@@ -406,9 +406,9 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
 
 def append_to_sheet(
     row_data,
+    service_account_file,
     spreadsheet_name="ICASSP 2026 Experiment Results",
     worksheet_name="main",
-    service_account_file="/home/u5504709/new_work/speech_ppl/src/service_account.json"
 ):
     # Authenticate
     creds = Credentials.from_service_account_file(
@@ -436,7 +436,7 @@ def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=N
     results = get_losses(
         dataset=processed_dataset, 
         labels_dict=human_scores, 
-        alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
+        alignments_path=f"{args.root_dir}/src/mfa/phone_extraction.json",
         granularity="word",
         pooling=None,
         norm_dict=norm_dict,
@@ -490,7 +490,7 @@ def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=N
         pcc_norm_pvalue = "n/a"
     
     # Record in CSV
-    append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, "n/a", len(df)])
+    append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, "n/a", len(df)], SERVICE_ACCOUNT)
 
 def utterance_level_operation(processed_dataset, human_scores, limit=None, output_dir=None):
 
@@ -501,7 +501,7 @@ def utterance_level_operation(processed_dataset, human_scores, limit=None, outpu
         results = get_losses(
             dataset=processed_dataset, 
             labels_dict=human_scores, 
-            alignments_path="/home/u5504709/new_work/speech_ppl/src/mfa/phone_extraction.json",
+            alignments_path=f"{args.root_dir}/src/mfa/phone_extraction.json",
             granularity="utterance",
             pooling=pool,
             norm_dict=None,
@@ -536,7 +536,7 @@ def utterance_level_operation(processed_dataset, human_scores, limit=None, outpu
         pcc_pvalue = pcc_result.pvalue
 
         # Record in CSV
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, "utterance", pool, pcc_stats, pcc_pvalue, "n/a", "n/a", auc, "n/a", f"{nan_percent:2f}%", len(df)])
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, "utterance", pool, pcc_stats, pcc_pvalue, "n/a", "n/a", auc, "n/a", f"{nan_percent:2f}%", len(df)], SERVICE_ACCOUNT)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -547,11 +547,12 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     parser.add_argument("--labels_dir", type=str, required=True)
     parser.add_argument("--dataset_dir", type=str, required=True)
+    parser.add_argument("--root_dir", type=str)
     parser.add_argument("--name", type=str, required=True)
 
     args = parser.parse_args()
     seed_everything(args.seed)
-    open('/home/u5504709/new_work/speech_ppl/src/taste/tools/error_log', 'w').close()
+    open(f'{args.root_dir}/src/taste/tools/error_log', 'w').close()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -581,9 +582,10 @@ if __name__ == "__main__":
     spk_count = processed["spk_count"]
     print(f"Processed {len(processed_dataset)} samples.")
 
-    NORM_DICT_DIR = "/home/u5504709/new_work/speech_ppl/src/gslm/tools/result_dicts"
+    NORM_DICT_DIR = f"{args.root_dir}/src/gslm/tools/result_dicts"
+    SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
     OUTPUT_DIR = args.output_dir
-    LIMIT = None
+    LIMIT = 5
 
     # ============= word-level =================   
     word_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, NORM_DICT_DIR=NORM_DICT_DIR, limit=LIMIT, output_dir=OUTPUT_DIR)

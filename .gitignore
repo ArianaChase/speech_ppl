@@ -17,12 +17,15 @@ src/service_account.json
 src/gslm/tools/result_dicts/
 pretrained_models/
 /home/u5504709/new_work/speech_ppl/src/gslm/tools/error_log
-src/taste/tools/error_log
+/src/taste/tools/error_log.txt
 src/gslm/tools/result_dicts/GSLM_*norm.json
 src/gslm/tools/result_dicts/TWIST_*norm.json
 nvidia-bug-report.log.gz
 nvidia-driver-local-repo-ubuntu2204-580.178.04_1.0-1_amd64.deb
 
+src/gslm/tools/error_log
+src/flow/error_log
+CosyVoice/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
