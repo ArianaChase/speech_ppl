@@ -227,40 +227,19 @@ def process_speechocean(input_dataset):
 
 def clean_transcript(text):
     text = text.upper()  # normalize case
-    cleaned_text = re.sub(r'[^\w\s]', '', text)  # strip anything that's not a word char or whitespace
+    cleaned_text = re.sub(r'[^\w\s]', '', text) # strip anything that's not a word char or whitespace
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     return cleaned_text
 
-def parse_human_annotations(filename):
-    human_scores = {}
-    with open(filename) as json_data:
-        data = json.load(json_data)
-        for audio_file in data:
-            value = data[audio_file]
-            human_scores[audio_file] = {
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"],
-                "words" : value["words"],
-                "text" : value["text"]
-            }
-    return human_scores
-
-
-def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm_dict=None, limit=None):
+def get_losses(dataset, labels_dict, alignments_path, limit=None):
     '''
     dataset         : dataset object with speaker, filename, and path
-    labels_dict     : dictionary of human annotated information, sorted by filename 
-    granularity     : word/utterance level
-    pooling         : pooling method (max/mean/std) - for utterance only
-    norm_dict      : dict for normalization
+    alignments_path : to filter the dataset to those that have alignments to compare to downstream
+    labels_dict     : to extract canonical text
     '''
 
-    ppl_info = []
-    error_log = []
+    per_word_losses_final = []
     file_count = 0
-    nan_count = 0
     lim = limit if limit != None else len(dataset)
 
     dataset_cleaned = []
@@ -268,7 +247,6 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
     with open(alignments_path, 'r') as f:
             alignment_list = json.load(f)
         
-    
     for sample in dataset:
         for idx in range(len(alignment_list) -1, -1, -1):
             if sample['filename'] == alignment_list[idx]['audio_id']:
@@ -289,254 +267,58 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         speaker = sample["speaker"]
         file_path = sample["path"]
         filename = sample["filename"]
-        utterance_ppl_info = []
 
         pbar.set_description(f"Getting losses for file: {filename}")
 
         # load audio
         audio, sr = librosa.load(file_path, sr=TASLM_INPUT_SAMPLING_RATE)
 
-        # get human annotations
         human_annotation_obj = labels_dict.get(filename)
 
         per_word_losses_result = taslm_model.get_per_word_losses(
                 audio_sample={"array": audio, "sampling_rate": sr},
-                text=human_annotation_obj['text']
+                text=clean_transcript(human_annotation_obj['text'])
             )
         per_word_losses = per_word_losses_result['per_word_losses']
         operated_text = clean_transcript(per_word_losses_result['text'])
         words = operated_text.split()
-        auc_threshold = 3
 
-        print(f"WORDS: {words}")
+        print(f"LENGTH OF LOSSES {len(per_word_losses)}")
+        print(f"LENGTH OF WORDS {len(words)} {operated_text}")
 
-        # safety check
-        if len(per_word_losses) != len(words):
-            error_log.append(f"At file {filename}, loss tensor length does not align with operated text length")
-
-        if len(per_word_losses) != len(human_annotation_obj['words']):
-            error_log.append(f"At file {filename}, loss tensor length does not align with human word scores amt")
-
-        # loss recording
-        if granularity == "word":
-            if len(words) != len(per_word_losses):
-                error_log.append(f"At file {filename}, per_word_losses ({len(per_word_losses)}) do not line up with words ({len(words)}): words are {words}")
-                continue
-            for idx in range(0, len(per_word_losses)):
-                loss = per_word_losses[idx].item()
-
-                # normalization
-                # TODO: implement normalization
-
-                word = words[idx]
-                freq = word_frequency(word, 'en')
-                neg_log_freq = -math.log(freq) if freq > 0 else np.nan  # guard against unknown words
-                w_mean = None
-                w_std = None
-
-                for bucket, item in norm_dict.items():
-                    s = item['freq_range']
-                    clean_s = s.strip("()[]")
-                    left_str, right_str = clean_s.split(",")
-                    left = float(left_str)
-                    right = float(right_str)
-                    interval = pd.Interval(left, right, closed="right")
-
-                    if neg_log_freq in interval:
-                        w_mean = item['mean']
-                        w_std = item['std']
-
-                        error_log.append(f"{word} has entered bucket {bucket}, freq is {neg_log_freq}, range is {s}")
-
-                if w_mean != None and w_std != None and w_std > 0:
-                    loss_norm = (loss - w_mean) / w_std
-                else:
-                    loss_norm = np.nan
-
-                ppl_info.append({
-                    "speaker" : speaker,
-                    "filename" : filename,
-                    "label" : words[idx],
-                    "auc_label" : 1 if human_annotation_obj['words'][idx]['accuracy'] > auc_threshold else 0,
-                    "ppl_loss" : -loss,
-                    "ppl_loss_norm" : -loss_norm,
-                    "human_score": human_annotation_obj['words'][idx]['accuracy']
-                })
-
-        elif granularity == "utterance":
-
-            loss_pooled = None
-
-            # pooling
-            if pooling == "mean":
-                loss_pooled = np.mean(per_word_losses)
-            elif pooling == "max":
-                loss_pooled = np.max(per_word_losses)
-            elif pooling == "std":
-                loss_pooled = np.std(per_word_losses)
-            else:
-                raise Exception("Invalid pooling method")
-
-            if np.isnan(loss_pooled):
-                nan_count += 1
-
-            ppl_info.append({
+        for idx, loss in enumerate(per_word_losses):
+            per_word_losses_final.append({
                 "speaker" : speaker,
+                "file_path" : file_path,
                 "filename" : filename,
-                "label" : operated_text,
-                "auc_label" : 1 if human_annotation_obj['accuracy'] > auc_threshold else 0,
-                "ppl_loss" : -loss_pooled,
-                "ppl_loss_norm" : None,
-                "human_score": human_annotation_obj['accuracy']
+                "word_text" : words[idx],
+                "token_id" : idx,
+                "ppl_loss" : loss,
             })
-        else:
-            raise Exception("Invalid granularity.")
 
         file_count += 1
             
-    with open(f"{args.root_dir}/src/taste/tools/error_log", "a") as f:
-        for i in error_log:
-            f.write(i)
-            f.write("\n")
 
     return {
-        "results" : ppl_info,
-        "nan_count" : nan_count
+        "results" : per_word_losses_final
     }
 
-def append_to_sheet(
-    row_data,
-    service_account_file,
-    spreadsheet_name="ICASSP 2026 Experiment Results",
-    worksheet_name="main",
-):
-    # Authenticate
-    creds = Credentials.from_service_account_file(
-        service_account_file,
-        scopes=SCOPES
-    )
-
-    client = gspread.authorize(creds)
-
-    # Open sheet
-    spreadsheet = client.open(spreadsheet_name)
-    worksheet = spreadsheet.worksheet(worksheet_name)
-
-    # Append row
-    worksheet.append_row(row_data)
-
-    print("Spreadsheet updated successfully.")
-
-def word_level_operation(processed_dataset, human_scores, NORM_DICT_DIR, limit=None, output_dir=None):
-    with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_word_none_norm.json", "r") as f:
-        norm_dict = json.load(f)
-
-    csv_path = f"{output_dir}/{MODEL_TYPE}_{MODEL_NAME}_word_none_losses.csv"
-    
-    results = get_losses(
-        dataset=processed_dataset, 
-        labels_dict=human_scores, 
-        alignments_path=f"{args.root_dir}/src/mfa/phone_extraction.json",
-        granularity="word",
-        pooling=None,
-        norm_dict=norm_dict,
-        limit=limit,
-        )
-
-    print(results['results'][0])
-    ppl_results = results["results"]
-
-    with open(csv_path, "w") as f:
-        fieldnames = ppl_results[0].keys()
-        dict_writer = csv.DictWriter(f, fieldnames)
-        dict_writer.writeheader()
-        dict_writer.writerows(ppl_results)
-    
-    # correlate
-    df = pd.DataFrame(ppl_results)
-    df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
-    x = df["ppl_loss"]
-    y = df["human_score"]
-
-    pcc_result = scipy.stats.pearsonr(x, y)
-    pcc_stats = pcc_result.statistic
-    pcc_pvalue = pcc_result.pvalue
-
-    y_score = df["ppl_loss"]
-    y_true = df["auc_label"]
-    if len(np.unique(y_true)) != 1:
-        auc = roc_auc_score(y_true, y_score)
-    else:
-        auc = "n/a"
-
-    df_norm = pd.DataFrame(ppl_results)
-    df_norm.dropna(axis=0, inplace=True)
-    x_norm = df_norm["ppl_loss_norm"]
-    y_norm = df_norm["human_score"]
-
-    y_score = df_norm["ppl_loss_norm"]
-    y_true = df_norm["auc_label"]
-    if len(np.unique(y_true)) != 1:
-        auc_norm = roc_auc_score(y_true, y_score)
-    else:
-        auc_norm = "n/a"
-
-    if len(x_norm) > 2 and len(y_norm) > 2:
-        pcc_norm_result = scipy.stats.pearsonr(x, y)
-        pcc_norm_stats = pcc_norm_result.statistic
-        pcc_norm_pvalue = pcc_norm_result.pvalue
-    else:
-        pcc_norm_stats = "n/a"
-        pcc_norm_pvalue = "n/a"
-    
-    # Record in CSV
-    append_to_sheet([MODEL_TYPE, MODEL_NAME, "word", "n/a", pcc_stats, pcc_pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, auc_norm, "n/a", len(df)], SERVICE_ACCOUNT)
-
-def utterance_level_operation(processed_dataset, human_scores, limit=None, output_dir=None):
-
-    
-    for pool in ["mean", "max", "std"]:
-        csv_path = f"{output_dir}/{MODEL_TYPE}_{MODEL_NAME}_utterance_none_losses.csv"
-
-        results = get_losses(
-            dataset=processed_dataset, 
-            labels_dict=human_scores, 
-            alignments_path=f"{args.root_dir}/src/mfa/phone_extraction.json",
-            granularity="utterance",
-            pooling=pool,
-            norm_dict=None,
-            limit=limit,
-            )
-
-        print(results['results'][0])
-        ppl_results = results["results"]
-        nan_percent = (results["nan_count"] / len(ppl_results)) * 100
-
-        with open(csv_path, "w") as f:
-            fieldnames = ppl_results[0].keys()
-            dict_writer = csv.DictWriter(f, fieldnames)
-            dict_writer.writeheader()
-            dict_writer.writerows(ppl_results)
-
-        # correlate
-        df = pd.DataFrame(ppl_results)
-        df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
-        x = df["ppl_loss"]
-        y = df["human_score"]
-
-        y_score = df["ppl_loss"]
-        y_true = df["auc_label"]
-        if len(np.unique(y_true)) != 1:
-            auc = roc_auc_score(y_true, y_score)
-        else:
-            auc = "n/a"
-
-        pcc_result = scipy.stats.pearsonr(x, y)
-        pcc_stats = pcc_result.statistic
-        pcc_pvalue = pcc_result.pvalue
-
-        # Record in CSV
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, "utterance", pool, pcc_stats, pcc_pvalue, "n/a", "n/a", auc, "n/a", f"{nan_percent:2f}%", len(df)], SERVICE_ACCOUNT)
+def parse_human_annotations(filename):
+    human_scores = {}
+    with open(filename) as json_data:
+        data = json.load(json_data)
+        for audio_file in data:
+            value = data[audio_file]
+            human_scores[audio_file] = {
+                "filename" : audio_file,
+                "accuracy" : value["accuracy"],
+                "fluency" : value["fluency"],
+                "prosodic" : value["prosodic"],
+                "completeness" : value["completeness"],
+                "words" : value["words"],
+                "text" : value["text"]
+            }
+    return human_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -585,13 +367,23 @@ if __name__ == "__main__":
     NORM_DICT_DIR = f"{args.root_dir}/src/gslm/tools/result_dicts"
     SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
     OUTPUT_DIR = args.output_dir
-    LIMIT = 5
 
-    # ============= word-level =================   
-    word_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, NORM_DICT_DIR=NORM_DICT_DIR, limit=LIMIT, output_dir=OUTPUT_DIR)
-    
-    # ======= utterance-level ===========
-    utterance_level_operation(processed_dataset=processed_dataset, human_scores=human_scores, limit=LIMIT, output_dir=OUTPUT_DIR)
+    csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_per_word_losses.csv"
+        
+    results = get_losses(
+        dataset=processed_dataset, 
+        alignments_path=f"{args.root_dir}/src/mfa/phone_extraction.json",
+        labels_dict=human_scores,
+        limit=None,
+        )
+
+    ppl_results = results["results"]
+
+    with open(csv_path, "w") as f:
+        fieldnames = ppl_results[0].keys()
+        dict_writer = csv.DictWriter(f, fieldnames)
+        dict_writer.writeheader()
+        dict_writer.writerows(ppl_results)
         
     # Capture and format the finish time 
     now = datetime.now() 

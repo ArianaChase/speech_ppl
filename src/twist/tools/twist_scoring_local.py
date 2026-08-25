@@ -180,27 +180,19 @@ def process_speechocean(input_dataset):
             "spk_count" : spk_count - len(ignored_speakers)
         }
 
-def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm_dict=None, limit=None):
+def get_losses(dataset, alignments_path, limit=None):
     '''
     dataset         : dataset object with speaker, filename, and path
-    labels_dict     : dictionary of human annotated information, sorted by filename 
-    alignments_path : json file of phone-level alignment boundaries
-    granularity     : phone/word/utterance level
-    pooling         : pooling method (max/mean/std)
-    norm            : normalization
-    norm_dict      : dict for normalization
+    alignments_path : to filter the dataset to those that have alignments to compare to downstream
     '''
-    ppl_info = []
+    per_token_losses = []
     file_count = 0
-    error_log = []
-    nan_count = 0
     lim = limit if limit != None else len(dataset)
 
     with open(alignments_path, 'r') as f:
         alignment_list = json.load(f)
-    
-    dataset_cleaned = []
 
+    dataset_cleaned = []
     for sample in dataset:
         for idx in range(len(alignment_list) -1, -1, -1):
             if sample['filename'] == alignment_list[idx]['audio_id']:
@@ -220,278 +212,30 @@ def get_losses(dataset, labels_dict, alignments_path, granularity, pooling, norm
         speaker = sample["speaker"]
         file_path = sample["path"]
         filename = sample["filename"]
-        utterance_ppl_info = []
         pbar.set_description(f"Getting per phone losses for file: {filename}")
 
         # load audio
         audio, sr = torchaudio.load(file_path)
         audio = audio.to(device)
-
-        # external preparation
-        alignment_obj = next((item for item in alignment_list if item.get('audio_id') == filename), None)
-        phone_alignments = alignment_obj["phone_alignment"] # list of phone objects {start, end, label}
-        word_alignments = alignment_obj["word_alignment"] # list of word objects {start, end, label}
-        alignments = None
-
-        human_annotation_obj = labels_dict.get(filename)
-        phone_scores = []
-        word_scores = []
-        utterance_score = human_annotation_obj["accuracy"]
-        auc_threshold = None
-
-        for word_obj in human_annotation_obj["words"]:
-            for i in range(0, len(word_obj["phones"])):
-                phone_scores.append({
-                    "phone" : word_obj["phones"][i], 
-                    "accuracy" : word_obj["phones-accuracy"][i]
-                }) 
-            word_scores.append({
-                "word" : word_obj["text"],
-                "accuracy" : word_obj["accuracy"],
-                "stress" : word_obj["stress"] # unused for now
-            })
-
-        if granularity == "phone":
-            # align canonical phonemes and phone alignments
-            phone_alignments_labels = [item['label'] for item in phone_alignments]
-            phone_scores_labels = [item['phone'] for item in phone_scores]
-
-            matcher = SequenceMatcher(None, phone_scores_labels, phone_alignments_labels)
-            opcodes = matcher.get_opcodes()
-            has_error = False
-            matched_alignments = []
-            matched_scores = []
-            for tag, a_idx1, a_idx2, b_idx1, b_idx2 in opcodes:
-                if tag == "equal":
-                    matched_scores.extend(phone_scores[a_idx1:a_idx2])
-                    matched_alignments.extend(phone_alignments[b_idx1:b_idx2])
-            phone_alignments = matched_alignments
-            phone_scores = matched_scores
-
-            if len(phone_alignments) != len(phone_scores):
-                error_log.append(f"Alignment mismatch at file {filename}. {len(phone_alignments)} alignments but {len(phone_scores)} scores.")
-                error_log.append(f"{[item['label'] for item in phone_alignments]}\n{[item['phone'] for item in phone_scores]}")
-
-            human_scores = phone_scores
-            alignments = phone_alignments
-            auc_threshold = 0.5
-
-        elif granularity == "word":
-            if len(word_scores) != len(word_alignments):
-                raise Exception("Human word annotations cannot be aligned with word alignments.")
-            human_scores = word_scores
-            alignments = word_alignments
-            auc_threshold = 3
-        elif granularity == "utterance":
-            human_scores = utterance_score
-            auc_threshold = 3
-        else:
-            raise Exception("Invalid granularity")
         
         # get ppl_losses per token + timestamps
         losses_with_timestamps = get_per_token_losses(audio)["loss_with_timestamps"]
 
-        # aggregate
-        if granularity != "utterance":
-            for i in range(0, len(alignments)):
-                current_alignment = alignments[i]
-
-                a_start = current_alignment["start"]
-                a_end = current_alignment["end"]
-                losses = []
-
-                for loss_item in losses_with_timestamps:
-                    t_start = loss_item[1]
-                    t_end = loss_item[2]
-                    if is_overlapping(a_start, a_end, t_start, t_end):
-                        losses.append(loss_item[0])
-                
-                # pooling
-                loss_pooled = np.nan
-                
-                if pooling == "mean":
-                    loss_pooled = np.mean(losses) if len(losses) > 0 else np.nan
-                elif pooling == "max":
-                    loss_pooled = np.max(losses) if len(losses) > 0 else np.nan
-                elif pooling == "std":
-                    loss_pooled = np.std(losses) if len(losses) > 1 else np.nan
-                else:
-                    raise Exception("No pooling method specified.")
-                
-                if np.isnan(loss_pooled):
-                    nan_count += 1
-
-                # normalization
-                if granularity == "phone":
-                    # z-score normalization
-                    phone_label = strip_stress(alignments[i]['label']) # type: ignore
-                    p_mean = norm_dict[phone_label]['mean'] # type: ignore
-                    p_std = norm_dict[phone_label]['std'] # type: ignore
-                    loss_pooled_norm = ((loss_pooled - p_mean) / p_std) if p_std > 0 else np.nan
-                else :
-                    word = alignments[i]['label']
-                    freq = word_frequency(word, 'en')
-                    neg_log_freq = -math.log(freq) if freq > 0 else np.nan  # guard against unknown words
-                    w_mean = None
-                    w_std = None
-
-                    for bucket, item in norm_dict.items():
-                        s = item['freq_range']
-                        clean_s = s.strip("()[]")
-                        left_str, right_str = clean_s.split(",")
-                        left = float(left_str)
-                        right = float(right_str)
-                        interval = pd.Interval(left, right, closed="right")
-
-                        if neg_log_freq in interval:
-                            w_mean = item['mean']
-                            w_std = item['std']
-
-                            error_log.append(f"{word} has entered bucket {bucket}, freq is {neg_log_freq}, range is {s}")
-
-                    if w_mean != None and w_std != None and w_std > 0:
-                        loss_pooled_norm = (loss_pooled - w_mean) / w_std
-                    else:
-                        loss_pooled_norm = np.nan
-
-                utterance_ppl_info.append({
-                    "speaker" : speaker,
-                    "filename" : filename,
-                    "label" : current_alignment['label'],
-                    "auc_label" : 1 if human_scores[i]['accuracy'] > auc_threshold else 0,
-                    "ppl_loss" : -loss_pooled,
-                    "ppl_loss_norm" : -loss_pooled_norm,
-                    "human_score": human_scores[i]['accuracy']
-                })
-
-                if len(alignments) != len(utterance_ppl_info):
-                    error_log.append(f"[LOSS/ALIGNMENT MISMATCH] Phone segmentation does not match at file {filename}. {len(phone_alignments)} phone alignments but {len(ppl_info)} losses") 
-        
-        else:
-            losses = []
-            for loss_item in losses_with_timestamps:
-                losses.append(loss_item[0])
-            
-            # pooling
-            loss_pooled = np.nan
-            
-            if pooling == "mean":
-                loss_pooled = np.mean(losses) if len(losses) > 0 else np.nan
-            elif pooling == "max":
-                loss_pooled = np.max(losses) if len(losses) > 0 else np.nan
-            elif pooling == "std":
-                loss_pooled = np.std(losses) if len(losses) > 1 else np.nan
-            else:
-                raise Exception("No pooling method specified.")
-            
-            if np.isnan(loss_pooled):
-                nan_count += 1
-
-            utterance_ppl_info.append({
+        for idx, loss in enumerate(losses_with_timestamps):
+            per_token_losses.append({
                 "speaker" : speaker,
+                "file_path" : file_path,
                 "filename" : filename,
-                "label" : human_annotation_obj["text"],
-                "auc_label" : 1 if human_scores > auc_threshold else 0,
-                "ppl_loss" : -loss_pooled,
-                "ppl_loss_norm" : np.nan,
-                "human_score": human_scores
+                "token_idx" : idx,
+                "ppl_loss" : loss[0],
+                "start" : loss[1],
+                "end" : loss[2]
             })
-    
-        ppl_info += utterance_ppl_info
+
         file_count += 1
 
-    with open(f"{args.root_dir}/src/gslm/tools/error_log", "a") as f:
-        for i in error_log:
-            f.write(i)
-            f.write("\n")
-
     return {
-        "results" : ppl_info,
-        "nan_count" : nan_count
-    }
-
-def append_to_sheet(
-    row_data,
-    service_account_file,
-    spreadsheet_name="ICASSP 2026 Experiment Results",
-    worksheet_name="main",
-):
-    # Authenticate
-    creds = Credentials.from_service_account_file(
-        service_account_file,
-        scopes=SCOPES
-    )
-
-    client = gspread.authorize(creds)
-
-    # Open sheet
-    spreadsheet = client.open(spreadsheet_name)
-    worksheet = spreadsheet.worksheet(worksheet_name)
-
-    # Append row
-    worksheet.append_row(row_data)
-
-    print("Spreadsheet updated successfully.")
-
-def parse_human_annotations(filename):
-    human_scores = {}
-    with open(filename) as json_data:
-        data = json.load(json_data)
-        for audio_file in data:
-            value = data[audio_file]
-            human_scores[audio_file] = {
-                "filename" : audio_file,
-                "accuracy" : value["accuracy"],
-                "fluency" : value["fluency"],
-                "prosodic" : value["prosodic"],
-                "completeness" : value["completeness"],
-                "words" : value["words"],
-                "text" : value["text"]
-            }
-    return human_scores
-
-def per_phone_auc(results):
-
-    phone_auc_dict = {}
-
-    for result in results:
-        if result['label'] not in list(phone_auc_dict.keys()):
-            phone_auc_dict[result['label']] = {
-                'auc_labels' : [result['auc_label']],
-                'ppl_losses' : [result['ppl_loss']],
-                'ppl_norm_losses' : [result['ppl_loss_norm']],
-            }
-        else:
-            phone_auc_dict[result['label']]['auc_labels'].append(result['auc_label'])
-            phone_auc_dict[result['label']]['ppl_losses'].append(result['ppl_loss'])
-            phone_auc_dict[result['label']]['ppl_norm_losses'].append(result['ppl_loss_norm'])
-    
-    roc_auc_scores = []
-    roc_auc_scores_norm = []
-
-    for phone, item in phone_auc_dict.items():
-        df = pd.DataFrame(item)
-        df = df.dropna(axis=0, subset=['ppl_losses', 'auc_labels'])
-
-        y_true = df['auc_labels']
-        y_score = df['ppl_losses']
-
-        if len(np.unique(y_true)) != 1 and len(y_score) >= 1:
-            auc = roc_auc_score(y_true, y_score)
-            roc_auc_scores.append(auc)
-
-        df = pd.DataFrame(item)
-        df = df.dropna(axis=0, subset=['ppl_norm_losses', 'auc_labels'])
-        y_true_norm = df['auc_labels']
-        y_score_norm = df['ppl_norm_losses']
-
-        if len(np.unique(y_true_norm)) != 1 and len(y_score_norm) >= 1:
-            auc = roc_auc_score(y_true_norm, y_score_norm) # because 0 - 1 is akin to big loss - small loss
-            roc_auc_scores_norm.append(auc)
-
-    return {
-        'auc' : np.nanmean(roc_auc_scores) if len(roc_auc_scores) >= 1 else "n/a",
-        'auc_norm' : np.nanmean(roc_auc_scores_norm) if len(roc_auc_scores_norm) >= 1 else "n/a"
+        "results" : per_token_losses,
     }
 
 if __name__ == "__main__":
@@ -524,13 +268,8 @@ if __name__ == "__main__":
     ) -> dict:
         return model.get_per_token_losses(audio_sample)
     
-    # get labels to compare to
-    score_labels = args.labels_dir
-    human_scores = parse_human_annotations(score_labels)
-
     # process dataset
     input_dataset = args.dataset_dir
-
     processed = process_speechocean(input_dataset)
     processed_dataset = processed["processed"]
     ignored_samples = processed["ignored"]
@@ -539,86 +278,24 @@ if __name__ == "__main__":
 
     # calculate losses
 
-    NORM_DICT_DIR = f"{args.root_dir}/src/gslm/tools/result_dicts"
-    SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
     OUTPUT_DIR = args.output_dir
+    
+    csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_per_token_losses.csv"   
 
-    for granularity in ["word", "utterance"]:
-        for pool in ["mean", "max", "std"]:
-
-            csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{granularity}_{pool}_losses.csv"
-
-            if granularity == "phone" or granularity == "word":
-                with open(f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pool}_norm.json", "r") as f:
-                    norm_dict = json.load(f)
-            else:
-                norm_dict = None
-
-            results = get_losses(
-                dataset=processed_dataset, 
-                labels_dict=human_scores, 
-                alignments_path=args.alignments, 
-                granularity=granularity,
-                pooling=pool,
-                norm_dict=norm_dict,
-                limit=10,
-                )
+    results = get_losses(
+        dataset=processed_dataset, 
+        alignments_path=args.alignments, 
+        limit=None,
+        )
             
-            ppl_results = results["results"]
-            nan_percent = (results["nan_count"] / len(ppl_results)) * 100
+    ppl_results = results["results"]
 
-            with open(csv_path, "w") as f:
-                fieldnames = ppl_results[0].keys()
-                dict_writer = csv.DictWriter(f, fieldnames)
-                dict_writer.writeheader()
-                dict_writer.writerows(ppl_results)
+    with open(csv_path, "w") as f:
+        fieldnames = ppl_results[0].keys()
+        dict_writer = csv.DictWriter(f, fieldnames)
+        dict_writer.writeheader()
+        dict_writer.writerows(ppl_results)
                 
-            # correlate
-            df = pd.DataFrame(ppl_results)
-            df.dropna(axis=0, subset=df.columns.drop('ppl_loss_norm'), inplace=True)
-            x = df["ppl_loss"]
-            y = df["human_score"]
-            pcc = scipy.stats.pearsonr(x, y)
-
-            # auc
-            y_score = df["ppl_loss"]
-            y_true = df["auc_label"]
-            if len(np.unique(y_true)) != 1:
-                auc = roc_auc_score(y_true, y_score)
-            else:
-                auc = "n/a"
-
-            if granularity == "phone" or granularity == "word":
-                df_norm = pd.DataFrame(ppl_results)
-                df_norm.dropna(axis=0, inplace=True)
-                x_norm = df_norm["ppl_loss_norm"]
-                y_norm = df_norm["human_score"]
-                pcc_norm = scipy.stats.pearsonr(x_norm, y_norm)
-                pcc_norm_stats = pcc_norm.statistic
-                pcc_norm_pvalue = pcc_norm.pvalue
-
-                y_score_norm = df_norm["ppl_loss_norm"]
-                y_true_norm = df_norm["auc_label"]
-                if len(np.unique(y_true_norm)) != 1:
-                    auc_norm = roc_auc_score(y_true_norm, y_score_norm)
-                else:
-                    auc_norm = "n/a"
-            
-            else:
-                pcc_norm_stats = "n/a"
-                pcc_norm_pvalue = "n/a"
-                auc_norm = "n/a"
-                
-            if granularity == "phone":
-                per_phone_auc_result = per_phone_auc(ppl_results)
-            else:
-                per_phone_auc_result = {
-                    "auc" : "n/a",
-                    "auc_norm" : "n/a"
-                }
-                
-            # Record in CSV
-            append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pool, pcc.statistic, pcc.pvalue, pcc_norm_stats, pcc_norm_pvalue, auc, per_phone_auc_result['auc'], auc_norm, per_phone_auc_result['auc_norm'], f"{nan_percent:2f}" + "%", len(df)], SERVICE_ACCOUNT)
     print(f"Speaker count: {spk_count}")
     print(f"File count: {len(processed_dataset)}")
 
