@@ -9,7 +9,6 @@ import torchaudio
 import logging
 import argparse
 import json
-import scipy.stats
 from omegaconf import OmegaConf
 from fairseq import utils
 from textless.data.speech_encoder import SpeechEncoder
@@ -17,15 +16,8 @@ from textless.vocoders.tacotron2.vocoder import TacotronVocoder
 from sampler import UnitLanguageModelSampler
 import time
 from tqdm import tqdm
-from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from operator import itemgetter
-import gspread
-from google.oauth2.service_account import Credentials
-from difflib import SequenceMatcher
-from wordfreq import word_frequency
-import math
-from sklearn.metrics import roc_auc_score
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
