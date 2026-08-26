@@ -51,7 +51,7 @@ def strip_stress(phone_label):
         return phone_label
 
 # main functions
-def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling):
+def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling, model_type):
     '''
     Returns a list of dicts containing loss scores aggregated by specified granularity and pooling
     '''
@@ -114,40 +114,50 @@ def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling):
             pass
 
         if granularity == "phone" or granularity == "word":  
-            for idx, current_alignment in enumerate(alignments):     # type: ignore     
-                a_start = current_alignment["start"] # type: ignore
-                a_end = current_alignment["end"]     # type: ignore
-                cur_losses = []
+            if model_type == "TASLM":
+                for idx in range(0, len(tokens)):
+                    utterance_results.append({
+                        'speaker' : speaker,
+                        'filename' : filename,
+                        'label' : human_score[idx]['word'],
+                        'human_score' : human_score[idx]['accuracy'],
+                        'score' : tokens[idx]['ppl_loss']
+                    })
+            else:
+                for idx, current_alignment in enumerate(alignments):     # type: ignore     
+                    a_start = current_alignment["start"] # type: ignore
+                    a_end = current_alignment["end"]     # type: ignore
+                    cur_losses = []
 
-                for loss_item in tokens:
-                    token_loss = loss_item['ppl_loss']
-                    t_start = loss_item['start']
-                    t_end = loss_item['end']
-                    if is_overlapping(a_start, a_end, t_start, t_end):
-                        cur_losses.append(token_loss)
+                    for loss_item in tokens:
+                        token_loss = loss_item['ppl_loss']
+                        t_start = loss_item['start']
+                        t_end = loss_item['end']
+                        if is_overlapping(a_start, a_end, t_start, t_end):
+                            cur_losses.append(token_loss)
 
-                # pooling
-                loss_pooled = np.nan
-                
-                if pooling == "mean":
-                    loss_pooled = np.mean(cur_losses) if len(cur_losses) > 0 else np.nan
-                elif pooling == "max":
-                    loss_pooled = np.max(cur_losses) if len(cur_losses) > 0 else np.nan
-                elif pooling == "std":
-                    loss_pooled = np.std(cur_losses) if len(cur_losses) > 1 else np.nan
-                else:
-                    raise Exception("No pooling method specified.")
-                
-                if np.isnan(loss_pooled):
-                    continue
+                    # pooling
+                    loss_pooled = np.nan
+                    
+                    if pooling == "mean":
+                        loss_pooled = np.mean(cur_losses) if len(cur_losses) > 0 else np.nan
+                    elif pooling == "max":
+                        loss_pooled = np.max(cur_losses) if len(cur_losses) > 0 else np.nan
+                    elif pooling == "std":
+                        loss_pooled = np.std(cur_losses) if len(cur_losses) > 1 else np.nan
+                    else:
+                        raise Exception("No pooling method specified.")
+                    
+                    if np.isnan(loss_pooled):
+                        continue
 
-                utterance_results.append({
-                    'speaker' : speaker,
-                    'filename' : filename,
-                    'label' : current_alignment['label'],
-                    'human_score' : human_score[idx]['accuracy'],
-                    'score' : loss_pooled
-                })
+                    utterance_results.append({
+                        'speaker' : speaker,
+                        'filename' : filename,
+                        'label' : current_alignment['label'],
+                        'human_score' : human_score[idx]['accuracy'],
+                        'score' : loss_pooled
+                    })
         elif granularity == "utterance":
             cur_losses = []
             for loss_item in tokens:
@@ -414,15 +424,24 @@ if __name__ == "__main__":
 
                     if calibration and norm:
                         continue
+                    elif MODEL_TYPE == "TASLM" and (granularity == "phone"):
+                        continue
+                    elif MODEL_TYPE == "TASLM" and granularity == "word" and (pooling == "max" or pooling == "std"):
+                        continue
                     elif granularity == 'utterance' and (calibration or norm):
                         continue
+
+                    
+
+                    print(f"GRANULARITY: {granularity}")
 
                     aggregated_losses = align_and_pool( # num of losses will equal num of alignments
                         losses=losses_df, 
                         alignments_dict=alignments, 
                         human_scores=human_scores,
                         granularity=granularity, 
-                        pooling=pooling)
+                        pooling=pooling,
+                        model_type=MODEL_TYPE)
 
                     #print(f"AGGREGATION: {aggregated_losses['results'][0]}")
 
@@ -435,6 +454,9 @@ if __name__ == "__main__":
                         calibration_losses = temp
 
                     #print(f"CALIBRATION: {calibration_losses[0]}")
+
+                    if MODEL_TYPE == "TASLM":
+                        pooling = "none"
 
                     if norm == True and granularity != 'utterance':
                         norm_dict_path = f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pooling}_norm.json"
@@ -454,7 +476,7 @@ if __name__ == "__main__":
                     auc_value_2 = calculate_auc(data=final_data,  granularity=granularity, threshold=0.25)
 
                     # record results
-                    append_to_sheet([MODEL_TYPE, MODEL_NAME, calibration, norm, pcc_value, pvalue, auc_value, auc_value_2, len(final_data)], SERVICE_ACCOUNT)
+                    append_to_sheet([MODEL_TYPE, MODEL_NAME, granularity, pooling, calibration, norm, pcc_value, pvalue, auc_value, auc_value_2, len(final_data)], SERVICE_ACCOUNT)
 
 
 
