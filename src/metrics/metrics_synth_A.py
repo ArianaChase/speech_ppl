@@ -104,13 +104,16 @@ def parse_final_data(data, metadata):
 def parse_delta(data):
     df = pd.DataFrame(data)
     print(df.columns)
-    df['clean_sub_delta'] = df['sub'] - df['clean'] # final: sub, initial: clean -> if final < initial (negative) = correct
+    df['clean_sub_delta'] = df['sub'] - df['clean'] # final: sub, initial: clean -> if final > initial (positive) = correct
     df['clean_dist_delta'] = df['dist'] - df['clean']
 
-    sub_percent = (df["clean_sub_delta"] < 0).mean() * 100 # percentage of negative values
-    dist_percent = (df["clean_dist_delta"] < 0).mean() * 100
+    df.dropna(inplace=True)
+
+    sub_percent = (df["clean_sub_delta"] > 0).mean() * 100 # percentage of positive values
+    dist_percent = (df["clean_dist_delta"] > 0).mean() * 100
 
     return sub_percent, dist_percent
+
 
 def parse_alignments(metadata, audio_version):
 
