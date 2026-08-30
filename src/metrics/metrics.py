@@ -63,9 +63,11 @@ def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling, 
     tokens_by_file = defaultdict(list)
     for tok in data:
         tokens_by_file[tok["filename"]].append(tok)
+    
 
     # aggregate by file
     for file, tokens in tokens_by_file.items():
+
         utterance_results = []
         speaker = tokens[0]['speaker']
         filename = tokens[0]['filename']
@@ -129,7 +131,9 @@ def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling, 
                     a_end = current_alignment["end"]     # type: ignore
                     cur_losses = []
 
-                    for loss_item in tokens:
+                    for i, loss_item in enumerate(tokens):
+                        # if i == len(tokens) - 1:
+                        #     continue
                         token_loss = loss_item['ppl_loss']
                         t_start = loss_item['start']
                         t_end = loss_item['end']
@@ -160,7 +164,9 @@ def align_and_pool(losses, alignments_dict, human_scores, granularity, pooling, 
                     })
         elif granularity == "utterance":
             cur_losses = []
-            for loss_item in tokens:
+            for idx, loss_item in enumerate(tokens):
+                # if idx == len(tokens) - 1:
+                #     continue
                 cur_losses.append(loss_item['ppl_loss'])
 
             loss_pooled = np.nan

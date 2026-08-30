@@ -24,7 +24,7 @@ src/gslm/tools/error_log
 src/flow/error_log
 CosyVoice/
 src/metrics/result_dicts/*.json
-
+src/metrics/run_3.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

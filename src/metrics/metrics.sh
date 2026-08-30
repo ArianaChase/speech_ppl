@@ -8,4 +8,4 @@ python $root_dir/src/metrics/metrics.py \
 	--dataset_dir $root_dir/speechocean762/WAVE/ \
 	--labels_dir $root_dir/src/scores_enhanced.json \
 	--alignments $root_dir/src/metrics/alignments.json \
-    --evaluation_file /home/ubuntu/speech_ppl/work/outputs/flow-slm/Flow-SLM_Flow-SLM-270M-acoustic_per_token_losses.csv
+    --evaluation_file /home/ubuntu/speech_ppl/work/outputs/cosyvoice/COSYVOICE_COSYVOICE_domestic_retrieval_per_token_losses.csv
