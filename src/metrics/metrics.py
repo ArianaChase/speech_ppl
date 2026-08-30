@@ -436,8 +436,7 @@ if __name__ == "__main__":
                         continue
                     elif granularity == 'utterance' and (calibration or norm):
                         continue
-
-                    
+                        continue
 
                     print(f"GRANULARITY: {granularity}")
 
