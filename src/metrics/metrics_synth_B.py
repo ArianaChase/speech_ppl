@@ -85,12 +85,15 @@ def parse_final_data(data, metadata):
         real_real = data['real_real']
         real_foil = data['real_foil']
         real_ref = data['real_ref']
+        ref_real = data['ref_real']
+        ref_foil = data['ref_foil']
+        ref_ref = data['ref_ref']
 
         final_data = []
         for index, file in metadata.iterrows():
             filename = file['utt_id']
 
-            if real_real.get(filename) == None or real_foil.get(filename) == None or real_ref.get(filename) == None:
+            if real_real.get(filename) == None or real_foil.get(filename) == None or real_ref.get(filename) == None or ref_foil.get(filename) == None or ref_ref.get(filename) == None or ref_real.get(filename) == None:
                 continue
 
             final_data.append({
@@ -98,6 +101,9 @@ def parse_final_data(data, metadata):
                 'real_real' : real_real.get(filename)['score'],
                 'real_foil' : real_foil.get(filename)['score'],
                 'real_ref' : real_ref.get(filename)['score'],
+                'ref_real' : ref_real.get(filename)['score'],
+                'ref_foil' : ref_foil.get(filename)['score'],
+                'ref_ref' : ref_ref.get(filename)['score'],
             })
 
     else:
@@ -129,16 +135,22 @@ def parse_delta(data):
     print(df.columns)
 
     if args.set_name == "setC":
-        df['foil_delta'] = df['real_foil'] - df['real_real'] # if final > initial (positive) = correct
-        df['ref_delta'] = df['real_ref'] - df['real_real']
+        df['real_foil_delta'] = df['real_foil'] - df['real_real'] # if final > initial (positive) = correct
+        df['real_canonical_delta'] = df['real_ref'] - df['real_real']
+        df['ref_foil_delta'] = df['ref_foil'] - df['ref_ref'] # if final > initial (positive) = correct
+        df['ref_actual_delta'] = df['ref_real'] - df['ref_ref'] # if final > initial (positive) = correct
 
-        foil_percent = (df["foil_delta"] > 0).mean() * 100
-        ref_percent = (df["ref_delta"] > 0).mean() * 100
+        real_foil_percent = (df["real_foil_delta"] > 0).mean() * 100
+        real_canon_percent = (df["real_canonical_delta"] > 0).mean() * 100
+        ref_foil_percent = (df["ref_foil_delta"] > 0).mean() * 100
+        ref_actual_percent = (df["ref_actual_delta"] > 0).mean() * 100
         size = len(df)
 
         return {
-            'foil_percent': foil_percent, 
-            'ref_percent' : ref_percent, 
+            'realxfoil': real_foil_percent, 
+            'realxcanon' : real_canon_percent, 
+            'refxfoil': ref_foil_percent,
+            'refxactual' : ref_actual_percent,
             'size' : size
         }
     else:
@@ -159,7 +171,7 @@ def parse_delta(data):
             'size' : size
         }
 
-def parse_alignments(metadata, audio_version):
+def parse_alignments(metadata, audio_version, text_version=None):
 
     alignments = {}
 
@@ -173,7 +185,7 @@ def parse_alignments(metadata, audio_version):
         elif audio_version == 'sub':
             alignments[file['stim_id']] = {
                 'start' : file['sub_word_start'],
-                'end' : file['sub_word_end'],
+                'end' : file['sub_ord_end'],
                 'label' : file['original_word']
             }
         elif audio_version == 'dist':
@@ -183,17 +195,31 @@ def parse_alignments(metadata, audio_version):
                 'label' : file['original_word']
             }
         elif audio_version == 'real':
-            alignments[file['utt_id']] = {
-                'start' : file['real_target_start'],
-                'end' : file['real_target_end'],
-                'label' : file['target_word']
-            }
-        elif audio_version == 'foil':
-            alignments[file['utt_id']] = {
-                'start' : file['real_foil_start'],
-                'end' : file['real_foil_end'],
-                'label' : file['target_word']
-            }
+            if text_version == 'foil':
+                alignments[file['utt_id']] = {
+                    'start' : file['real_foil_start'],
+                    'end' : file['real_foil_end'],
+                    'label' : file['target_word']
+                }
+            else:
+                alignments[file['utt_id']] = {
+                    'start' : file['real_target_start'],
+                    'end' : file['real_target_end'],
+                    'label' : file['target_word']
+                }
+        elif audio_version == 'ref':
+            if text_version == 'foil':
+                alignments[file['utt_id']] = {
+                    'start' : file['ref_foil_start'],
+                    'end' : file['ref_foil_end'],
+                    'label' : file['target_word']
+                }   
+            else:
+                alignments[file['utt_id']] = {
+                    'start' : file['ref_target_start'],
+                    'end' : file['ref_target_end'],
+                    'label' : file['target_word']
+                }                  
 
     return alignments
 
@@ -270,9 +296,9 @@ if __name__ == "__main__":
             "real_ref" : {}
         }
 
-        for audio_version in ['real']:
+        for audio_version in ['real', 'ref']:
             for text_version in ['real', 'foil', 'ref']:
-                alignments = parse_alignments(metadata_df, audio_version)
+                alignments = parse_alignments(metadata_df, audio_version, text_version)
                 csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{text_version}_{args.set_name}_per_token_losses.csv"
                 losses_df = pd.read_csv(csv_path, dtype={'token_id': str, 'filename': str, 'speaker': str})
 
@@ -287,7 +313,7 @@ if __name__ == "__main__":
         results = parse_delta(final_data)
 
         # record results
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['foil_percent'], results['ref_percent'], "", results['size'], "B"], SERVICE_ACCOUNT)
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['realxfoil'], results['realxcanon'], results['refxfoil'], results['refxactual'], results['size'], "B"], SERVICE_ACCOUNT)
 
 
     else:
