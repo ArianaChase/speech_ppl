@@ -257,7 +257,7 @@ if __name__ == "__main__":
 
     OUTPUT_DIR = args.output_dir
     
-    csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{AUDIO_VERSION}_per_token_losses.csv"   
+    csv_path = f"{OUTPUT_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{AUDIO_VERSION}_setB_per_token_losses.csv"   
 
     results = get_losses(
         dataset=processed_dataset, 

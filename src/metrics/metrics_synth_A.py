@@ -57,6 +57,10 @@ def align_and_pool(losses, alignments_dict):
         filename = tokens[0]['filename']
         current_alignment = alignments_dict.get(filename)
 
+        if current_alignment == None:
+            #print(f"{filename} HAS NO ALIGNMENT")
+            continue
+
         a_start = current_alignment["start"] # type: ignore
         a_end = current_alignment["end"]     # type: ignore
         cur_losses = []
@@ -112,7 +116,8 @@ def parse_delta(data):
     sub_percent = (df["clean_sub_delta"] > 0).mean() * 100 # percentage of positive values
     dist_percent = (df["clean_dist_delta"] > 0).mean() * 100
 
-    return sub_percent, dist_percent
+
+    return sub_percent, dist_percent, len(df)
 
 
 def parse_alignments(metadata, audio_version):
@@ -161,7 +166,7 @@ def append_to_sheet(
     row_data,
     service_account_file,
     spreadsheet_name="ICASSP 2026 Experiment Results",
-    worksheet_name="synth",
+    worksheet_name="test_A",
 ):
     # Authenticate
     creds = Credentials.from_service_account_file(
@@ -192,6 +197,7 @@ if __name__ == "__main__":
     parser.add_argument("--metadata", type=str)
     parser.add_argument("--evaluation_file")
     parser.add_argument("--evaluation_dir")
+    parser.add_argument("--set_name")
     args = parser.parse_args()
 
     CSV_DIR = args.evaluation_dir
@@ -201,7 +207,7 @@ if __name__ == "__main__":
     MODEL_TYPE = model_metadata[0]
     MODEL_NAME = model_metadata[1]
     SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
-    METADATA = "/home/ubuntu/speech_ppl/src/stim_final/stimuli_metadata_v3.csv"
+    METADATA = args.metadata
 
     metadata_df = pd.read_csv(METADATA)
 
@@ -213,8 +219,14 @@ if __name__ == "__main__":
     
     for audio_version in ['clean', 'sub', 'dist']:
         alignments = parse_alignments(metadata_df, audio_version)
-        csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_per_token_losses.csv"
+        print(alignments)
+        csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
+
+        print(f"Current file: {csv_path}")
+
         losses_df = pd.read_csv(csv_path, dtype={'token_id': str, 'filename': str, 'speaker': str})
+
+        print(losses_df.head())
 
         target_word_data = align_and_pool( # num of losses will equal num of alignments
             losses=losses_df, 
@@ -224,10 +236,10 @@ if __name__ == "__main__":
         data_store[audio_version] = target_word_data
 
     final_data = parse_final_data(data_store, metadata_df)
-    sub_percent, dist_percent = parse_delta(final_data)
+    sub_percent, dist_percent, size = parse_delta(final_data)
 
     # record results
-    append_to_sheet([MODEL_TYPE, MODEL_NAME, sub_percent, dist_percent, len(final_data)], SERVICE_ACCOUNT)
+    append_to_sheet([MODEL_TYPE, MODEL_NAME, sub_percent, dist_percent, size, "A"], SERVICE_ACCOUNT)
 
 
 

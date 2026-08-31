@@ -21,7 +21,7 @@ python $root_dir/src/twist/tools/twist_scoring_local_synth.py \
 	--name $name \
 	--root_dir $root_dir \
     --language_model_dir $twist_pretrained_model_dir \
-	--dataset_dir $root_dir/src/stim_final/WAVE \
+	--dataset_dir $root_dir/src/stim_final/setB_audio \
 	--output_dir $root_dir/work/outputs/twist/ \
 	--labels_dir $root_dir/src/scores_enhanced.json \
 	--device cuda \
