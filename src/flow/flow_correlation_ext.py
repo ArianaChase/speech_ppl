@@ -8,11 +8,11 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURATION ---
-ROOT_DIR = "/home/u5504709/new_work/speech_ppl/work/data/speechocean"
-LABELS_PATH = "/home/u5504709/new_work/speech_ppl/src/scores_enhanced.json"
-SERVICE_ACCOUNT = "/home/u5504709/new_work/speech_ppl/src/service_account.json"
+ROOT_DIR = "/home/ubuntu/speech_ppl/work/speechocean"
+LABELS_PATH = "/home/ubuntu/speech_ppl/src/scores_enhanced.json"
+SERVICE_ACCOUNT = "/home/ubuntu/speech_ppl/src/service_account.json"
 SPREADSHEET_NAME = "Pronunciation Evaluation Results"
-WORKSHEET_NAME = "new_flow"
+WORKSHEET_NAME = "revised_flow"
 
 # Model name mappings
 MODELS = {
