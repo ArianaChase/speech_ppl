@@ -10,3 +10,9 @@
 [submodule "moshi"]
 	path = moshi
 	url = https://github.com/kyutai-labs/moshi
+[submodule "speechocean762"]
+	path = speechocean762
+	url = https://github.com/jimbozhang/speechocean762
+[submodule "CosyVoice"]
+	path = CosyVoice
+	url = https://github.com/ArianaChase/CosyVoice
