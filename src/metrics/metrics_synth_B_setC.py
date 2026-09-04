@@ -1,22 +1,394 @@
-import glob, os, pandas as pd, numpy as np
-D = "work/outputs/cosyvoice"   # <-- folder holding the six setC per-token CSVs
-def tot(audio, text):
-    f = glob.glob(f"{D}/*_{audio}_{text}_setC_per_token_losses.csv")[0]
-    d = pd.read_csv(f, dtype={'filename': str})
-    return d.groupby('filename').ppl_loss.sum()          # whole utterance, same region for both texts
-S = {(a,t): tot(a,t) for a in ('real','ref') for t in ('real','foil','ref')}
-ids = sorted(set.intersection(*[set(v.index) for v in S.values()]))
-g = lambda a,t: S[(a,t)].loc[ids].values
-def pct(x, y): return 100*np.mean(x < y)                  # lower loss = better fit
+import gspread
+from google.oauth2.service_account import Credentials
+from difflib import SequenceMatcher
+from wordfreq import word_frequency
+import math
+from sklearn.metrics import roc_auc_score
+import scipy.stats
+import json
+import csv
+import numpy as np
+import pandas as pd
+import argparse
+import os
+from tqdm import tqdm
+from collections import defaultdict
+import re
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
 
-print("n =", len(ids))
-print("2AFC  actual beats foil (real audio)   :", round(pct(g('real','real'), g('real','foil')), 2))
-print("      actual beats canonical           :", round(pct(g('real','real'), g('real','ref')), 2))
-print("SANITY canonical beats actual (ref aud):", round(pct(g('ref','ref'), g('ref','real')), 2))
-print("      canonical beats foil             :", round(pct(g('ref','ref'), g('ref','foil')), 2))
-print("TEXT-PRIOR CONTROL actual beats foil on ref audio:", round(pct(g('ref','real'), g('ref','foil')), 2))
+# utils
+def is_overlapping(a_start, a_end, b_start, b_end):
+    if (a_end >= b_start and a_start <= b_end):
+        return True
+    else:
+        return False
 
-d_real = g('real','foil') - g('real','real')   # how much better the true text fits the LEARNER audio
-d_ref  = g('ref','foil')  - g('ref','real')    # the same preference on error-free audio
-print("reference-corrected 2AFC:", round(100*np.mean(d_real > d_ref), 2))
+
+def strip_stress(phone_label):
+    if phone_label[-1].isdigit():
+        return phone_label[:-1]
+    else:
+        return phone_label
+
+# main functions
+def align_and_pool(losses, alignments_dict, whole_utterance=False):
+    '''
+    Returns a list of dicts containing loss scores aggregated by specified granularity and pooling
+    If whole_utterance is True, ignores the alignment window and sums every token in the file,
+    so that both text hypotheses are scored over identical audio.
+    '''
+    data = losses.to_dict('records')
+
+    results = {}
+
+    # sort by file
+    tokens_by_file = defaultdict(list)
+    for tok in data:
+        tokens_by_file[tok["filename"]].append(tok)
+    
+
+    # aggregate by file
+    for file, tokens in tokens_by_file.items():
+
+        utterance_results = []
+        filename = tokens[0]['filename']
+        current_alignment = alignments_dict.get(filename)
+
+        if whole_utterance:
+            # no windowing -- every token in the file, so both text hypotheses see the same region
+            cur_losses = [loss_item['ppl_loss'] for loss_item in tokens]
+            target_loss = np.sum(cur_losses)
+
+        else:
+            a_start = current_alignment["start"] # type: ignore
+            a_end = current_alignment["end"]     # type: ignore
+            cur_losses = []
+
+            for i, loss_item in enumerate(tokens):
+                token_loss = loss_item['ppl_loss']
+                t_start = loss_item['start']
+                t_end = loss_item['end']
+                if is_overlapping(a_start, a_end, t_start, t_end):
+                    cur_losses.append(token_loss)
+
+            target_loss = np.mean(cur_losses)
+
+        results[filename] = {
+            'label' : current_alignment['label'],
+            'score' : target_loss
+        }
+
+    return {
+        'results' : results,
+}
+
+def parse_final_data(data, metadata):
+
+    if args.set_name == "setC":
+        real_real = data['real_real']
+        real_foil = data['real_foil']
+        real_ref = data['real_ref']
+        ref_real = data['ref_real']
+        ref_foil = data['ref_foil']
+        ref_ref = data['ref_ref']
+
+        final_data = []
+        for index, file in metadata.iterrows():
+            filename = file['utt_id']
+
+            if real_real.get(filename) == None or real_foil.get(filename) == None or real_ref.get(filename) == None or ref_foil.get(filename) == None or ref_ref.get(filename) == None or ref_real.get(filename) == None:
+                continue
+
+            final_data.append({
+                'filename' : filename,
+                'real_real' : real_real.get(filename)['score'],
+                'real_foil' : real_foil.get(filename)['score'],
+                'real_ref' : real_ref.get(filename)['score'],
+                'ref_real' : ref_real.get(filename)['score'],
+                'ref_foil' : ref_foil.get(filename)['score'],
+                'ref_ref' : ref_ref.get(filename)['score'],
+            })
+
+    else:
+        clean_clean = data['clean_clean']
+        clean_sub = data['clean_sub']
+        sub_sub = data['sub_sub']
+        sub_clean = data['sub_clean']
+
+        final_data = []
+
+        for index, file in metadata.iterrows():
+            filename = file['stim_id']
+
+            if clean_clean.get(filename) == None or clean_sub.get(filename) == None or sub_sub.get(filename) == None or sub_clean.get(filename) == None:
+                continue
+
+            final_data.append({
+                'filename' : filename,
+                'clean_clean' : clean_clean.get(filename)['score'],
+                'clean_sub' : clean_sub.get(filename)['score'],
+                'sub_clean' : sub_clean.get(filename)['score'],
+                'sub_sub' : sub_sub.get(filename)['score']
+            })
+
+    return final_data
+
+def parse_delta(data):
+    df = pd.DataFrame(data)
+    print(df.columns)
+
+    if args.set_name == "setC":
+        df['real_foil_delta'] = df['real_foil'] - df['real_real'] # if final > initial (positive) = correct
+        df['real_canonical_delta'] = df['real_ref'] - df['real_real']
+        df['ref_foil_delta'] = df['ref_foil'] - df['ref_ref'] # if final > initial (positive) = correct
+        df['ref_actual_delta'] = df['ref_real'] - df['ref_ref'] # if final > initial (positive) = correct
+
+        # text-prior control: actual vs foil on error-free audio, where the learner's error is absent
+        # so any preference here comes from the text being more plausible, not from the acoustics
+        df['text_prior_delta'] = df['ref_foil'] - df['ref_real'] # if final > initial (positive) = actual text preferred
+
+        real_foil_percent = (df["real_foil_delta"] > 0).mean() * 100
+        real_canon_percent = (df["real_canonical_delta"] > 0).mean() * 100
+        ref_foil_percent = (df["ref_foil_delta"] > 0).mean() * 100
+        ref_actual_percent = (df["ref_actual_delta"] > 0).mean() * 100
+        text_prior_percent = (df["text_prior_delta"] > 0).mean() * 100
+        size = len(df)
+
+        return {
+            'realxfoil': real_foil_percent, 
+            'realxcanon' : real_canon_percent, 
+            'refxfoil': ref_foil_percent,
+            'refxactual' : ref_actual_percent,
+            'textprior' : text_prior_percent,
+            'size' : size
+        }
+    else:
+        df['clean_delta'] = df['clean_sub'] - df['clean_clean'] # final: sub, initial: clean -> if final > initial (positive) = correct
+        df['sub_delta'] = df['sub_sub'] - df['sub_clean'] # final: sub, initial: clean -> if final < initial (negative) = correct
+        df['total_delta'] = df['sub_delta'] - df['clean_delta'] # if clean delta is pos, sub delta is neg = negative = correct
+        df.dropna(inplace=True)
+
+        clean_percent = (df["clean_delta"] > 0).mean() * 100 # percentage of positive values
+        sub_percent = (df["sub_delta"] < 0).mean() * 100
+        total_percent = (df['total_delta'] < 0).mean() * 100 
+        size = len(df)
+
+        return {
+            'clean_percent' : clean_percent, 
+            'sub_percent' : sub_percent, 
+            'total_percent' : total_percent, 
+            'size' : size
+        }
+
+def parse_alignments(metadata, audio_version, text_version=None):
+
+    alignments = {}
+
+    for index, file in metadata.iterrows():
+        if audio_version == 'clean':
+            alignments[file['stim_id']] = {
+                'start' : file['clean_word_start'],
+                'end' : file['clean_word_end'],
+                'label' : file['original_word']
+            }
+        elif audio_version == 'sub':
+            alignments[file['stim_id']] = {
+                'start' : file['sub_word_start'],
+                'end' : file['sub_word_end'],
+                'label' : file['original_word']
+            }
+        elif audio_version == 'dist':
+            alignments[file['stim_id']] = {
+                'start' : file['dist_word_start'],
+                'end' : file['dist_word_end'],
+                'label' : file['original_word']
+            }
+        elif audio_version == 'real':
+            if text_version == 'foil':
+                alignments[file['utt_id']] = {
+                    'start' : file['real_foil_start'],
+                    'end' : file['real_foil_end'],
+                    'label' : file['target_word']
+                }
+            else:
+                alignments[file['utt_id']] = {
+                    'start' : file['real_target_start'],
+                    'end' : file['real_target_end'],
+                    'label' : file['target_word']
+                }
+        elif audio_version == 'ref':
+            if text_version == 'foil':
+                alignments[file['utt_id']] = {
+                    'start' : file['ref_foil_start'],
+                    'end' : file['ref_foil_end'],
+                    'label' : file['target_word']
+                }   
+            else:
+                alignments[file['utt_id']] = {
+                    'start' : file['ref_target_start'],
+                    'end' : file['ref_target_end'],
+                    'label' : file['target_word']
+                }                  
+
+    return alignments
+
+def print_results(results, model_type, model_name):
+    '''
+    Prints the win rates to the terminal, grouped by what each number is for
+    '''
+
+    print(f"\n{model_type} / {model_name}")
+    print(f"n = {results['size']} utterances\n")
+
+    if args.set_name == "setC":
+        print("MAIN")
+        print(f"{'actual text beats foil, on learner audio (2AFC)':<52} {results['realxfoil']:>6.2f}%")
+        print(f"{'actual text beats canonical, on learner audio':<52} {results['realxcanon']:>6.2f}%")
+
+        print("\nSANITY (error-free audio)")
+        print(f"{'canonical beats actual':<52} {results['refxactual']:>6.2f}%")
+        print(f"{'canonical beats foil':<52} {results['refxfoil']:>6.2f}%")
+
+        print("\nCONTROL")
+        print(f"{'actual beats foil, on error-free audio (text prior)':<52} {results['textprior']:>6.2f}%")
+        print(f"{'  -> gap between 2AFC and text prior':<52} {results['realxfoil'] - results['textprior']:>6.2f} pts")
+
+    else:
+        print("MAIN")
+        print(f"{'clean text beats sub text, on clean audio':<52} {results['clean_percent']:>6.2f}%")
+        print(f"{'sub text beats clean text, on sub audio':<52} {results['sub_percent']:>6.2f}%")
+
+        print("\nDOUBLE SUBTRACTION")
+        print(f"{'preference flips in the right direction':<52} {results['total_percent']:>6.2f}%")
+
+    print()
+
+def calculate_auc(data, granularity, threshold):
+    '''
+    Returns an AUC value
+    '''
+
+    df = pd.DataFrame(data)
+    df.dropna(axis=0, inplace=True) 
+    y_score = -df["score"]                           # higher score = higher loss = worse pronunciation, so reversed
+
+    if len(np.unique(y_true)) != 1:
+        auc = roc_auc_score(y_true, y_score)
+    else:
+        auc = "n/a"
+
+    return auc
+
+def append_to_sheet(
+    row_data,
+    service_account_file,
+    spreadsheet_name="ICASSP 2026 Experiment Results",
+    worksheet_name="test_B",
+):
+    # Authenticate
+    creds = Credentials.from_service_account_file(
+        service_account_file,
+        scopes=SCOPES
+    )
+
+    client = gspread.authorize(creds)
+
+    # Open sheet
+    spreadsheet = client.open(spreadsheet_name)
+    worksheet = spreadsheet.worksheet(worksheet_name)
+
+    # Append row
+    worksheet.append_row(row_data)
+
+    print("Spreadsheet updated successfully.")
+
+# ======== main =========
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root_dir", type=str)
+    parser.add_argument("--dataset_dir", type=str)
+    parser.add_argument("--labels_dir", type=str)
+    parser.add_argument("--alignments", type=str)
+    parser.add_argument("--metadata", type=str)
+    parser.add_argument("--evaluation_file")
+    parser.add_argument("--evaluation_dir")
+    parser.add_argument("--set_name")
+
+    args = parser.parse_args()
+
+    CSV_DIR = args.evaluation_dir
+    CSV_PATH = os.listdir(CSV_DIR)[0]
+    print(CSV_PATH)
+    model_metadata = os.path.basename(CSV_PATH).split('_')
+    MODEL_TYPE = model_metadata[0]
+    MODEL_NAME = model_metadata[1]
+    SERVICE_ACCOUNT = f"{args.root_dir}/src/service_account.json"
+    METADATA = args.metadata
+
+    metadata_df = pd.read_csv(METADATA, dtype={0:str, 1:str})
+
+    if args.set_name == "setC":
+        data_store = {
+            "real_real" : {},
+            "real_foil" : {},
+            "real_ref" : {}
+        }
+
+        for audio_version in ['real', 'ref']:
+            for text_version in ['real', 'foil', 'ref']:
+                alignments = parse_alignments(metadata_df, audio_version, text_version)
+                csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{text_version}_{args.set_name}_per_token_losses.csv"
+                losses_df = pd.read_csv(csv_path, dtype={'token_id': str, 'filename': str, 'speaker': str})
+
+                target_word_data = align_and_pool( # num of losses will equal num of alignments
+                    losses=losses_df, 
+                    alignments_dict=alignments,
+                    whole_utterance=True, # both text hypotheses scored over the same audio
+                    )['results']
+
+                data_store[f"{audio_version}_{text_version}"] = target_word_data
+
+        final_data = parse_final_data(data_store, metadata_df)
+        results = parse_delta(final_data)
+
+        print_results(results, MODEL_TYPE, MODEL_NAME)
+
+        # record results
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['realxfoil'], results['realxcanon'], results['refxfoil'], results['refxactual'], results['textprior'], results['size'], "B"], SERVICE_ACCOUNT)
+
+
+    else:
+        data_store = {
+            "clean_clean" : {},
+            "clean_sub" : {},
+            "sub_sub" : {},
+            "sub_clean" : {},
+        }
+        
+        for audio_version in ['clean', 'sub']:
+            for text_version in ['clean', 'sub']:
+                alignments = parse_alignments(metadata_df, audio_version)
+                csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{text_version}_{args.set_name}_per_token_losses.csv"
+                losses_df = pd.read_csv(csv_path, dtype={'token_id': str, 'filename': str, 'speaker': str})
+
+                target_word_data = align_and_pool( # num of losses will equal num of alignments
+                    losses=losses_df, 
+                    alignments_dict=alignments,
+                    )['results']
+
+                data_store[f"{audio_version}_{text_version}"] = target_word_data
+
+        final_data = parse_final_data(data_store, metadata_df)
+        results = parse_delta(final_data)
+
+        print_results(results, MODEL_TYPE, MODEL_NAME)
+
+        # record results
+        #append_to_sheet([MODEL_TYPE, MODEL_NAME, results['clean_percent'], results['sub_percent'], results['total_percent'], results['size'], "B", args.set_name], SERVICE_ACCOUNT)
