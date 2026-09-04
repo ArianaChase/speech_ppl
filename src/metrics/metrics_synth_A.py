@@ -51,11 +51,12 @@ def align_and_pool(losses, alignments_dict):
     
 
     # aggregate by file
-    for file, tokens in tokens_by_file.items():
+    for file, tokens in tokens_by_file.items(): # tokens in every file
 
         utterance_results = []
         filename = tokens[0]['filename']
         current_alignment = alignments_dict.get(filename)
+        idx = current_alignment['idx']
 
         if current_alignment == None:
             #print(f"{filename} HAS NO ALIGNMENT")
@@ -65,12 +66,15 @@ def align_and_pool(losses, alignments_dict):
         a_end = current_alignment["end"]     # type: ignore
         cur_losses = []
 
-        for i, loss_item in enumerate(tokens):
-            token_loss = loss_item['ppl_loss']
-            t_start = loss_item['start']
-            t_end = loss_item['end']
-            if is_overlapping(a_start, a_end, t_start, t_end):
-                cur_losses.append(token_loss)
+        if MODEL_NAME == "TASLM":
+            cur_losses = tokens[idx]['ppl_loss']
+        else:
+            for i, loss_item in enumerate(tokens): # extracting only the loss within the alignments
+                token_loss = loss_item['ppl_loss']
+                t_start = loss_item['start']
+                t_end = loss_item['end']
+                if is_overlapping(a_start, a_end, t_start, t_end):
+                    cur_losses.append(token_loss)
 
         target_loss = np.mean(cur_losses)
 
@@ -116,7 +120,6 @@ def parse_delta(data):
     sub_percent = (df["clean_sub_delta"] > 0).mean() * 100 # percentage of positive values
     dist_percent = (df["clean_dist_delta"] > 0).mean() * 100
 
-
     return sub_percent, dist_percent, len(df)
 
 
@@ -129,19 +132,24 @@ def parse_alignments(metadata, audio_version):
             alignments[file['stim_id']] = {
                 'start' : file['clean_word_start'],
                 'end' : file['clean_word_end'],
-                'label' : file['original_word']
+                'label' : file['original_word'],
+                'idx' : file['word_index']
             }
         elif audio_version == 'sub':
             alignments[file['stim_id']] = {
                 'start' : file['sub_word_start'],
                 'end' : file['sub_word_end'],
-                'label' : file['original_word']
+                'label' : file['original_word'],
+                'idx' : file['word_index']
+
             }
         elif audio_version == 'dist':
             alignments[file['stim_id']] = {
                 'start' : file['dist_word_start'],
                 'end' : file['dist_word_end'],
-                'label' : file['original_word']
+                'label' : file['original_word'],
+                'idx' : file['word_index']
+
             }
 
     return alignments
@@ -220,7 +228,10 @@ if __name__ == "__main__":
     for audio_version in ['clean', 'sub', 'dist']:
         alignments = parse_alignments(metadata_df, audio_version)
         print(alignments)
-        csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
+        if MODEL_NAME == "TASLM":
+            csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
+        else:
+            csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
 
         print(f"Current file: {csv_path}")
 
@@ -238,8 +249,10 @@ if __name__ == "__main__":
     final_data = parse_final_data(data_store, metadata_df)
     sub_percent, dist_percent, size = parse_delta(final_data)
 
+    print(f"{sub_percent}\n{dist_percent}\n{size}")
+
     # record results
-    append_to_sheet([MODEL_TYPE, MODEL_NAME, sub_percent, dist_percent, size, "A"], SERVICE_ACCOUNT)
+    append_to_sheet([MODEL_TYPE, MODEL_NAME, sub_percent, dist_percent, size, "A", args.set_name], SERVICE_ACCOUNT)
 
 
 

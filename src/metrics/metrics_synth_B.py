@@ -341,7 +341,7 @@ if __name__ == "__main__":
         results = parse_delta(final_data)
 
         # record results
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['clean_percent'], results['sub_percent'], results['total_percent'], results['size'], "B"], SERVICE_ACCOUNT)
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['clean_percent'], results['sub_percent'], results['total_percent'], results['size'], "B", args.set_name], SERVICE_ACCOUNT)
 
 
 
