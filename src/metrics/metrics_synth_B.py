@@ -185,7 +185,7 @@ def parse_alignments(metadata, audio_version, text_version=None):
         elif audio_version == 'sub':
             alignments[file['stim_id']] = {
                 'start' : file['sub_word_start'],
-                'end' : file['sub_ord_end'],
+                'end' : file['sub_word_end'],
                 'label' : file['original_word']
             }
         elif audio_version == 'dist':

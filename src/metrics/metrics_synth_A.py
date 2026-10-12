@@ -229,7 +229,7 @@ if __name__ == "__main__":
         alignments = parse_alignments(metadata_df, audio_version)
         print(alignments)
         if MODEL_NAME == "TASLM":
-            csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
+            csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_word_losses.csv"
         else:
             csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{args.set_name}_per_token_losses.csv"
 

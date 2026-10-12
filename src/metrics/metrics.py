@@ -464,7 +464,7 @@ if __name__ == "__main__":
                         pooling = "none"
 
                     if norm == True and granularity != 'utterance':
-                        norm_dict_path = f"{NORM_DICT_DIR}/{MODEL_NAME}_{granularity}_{pooling}_norm.json"
+                        norm_dict_path = f"{NORM_DICT_DIR}/Flow-SLM_{granularity}_{pooling}_token_norm.json"
                         with open(norm_dict_path, "r") as f:
                             norm_dict = json.load(f)
                         norm_losses = normalize(scores=calibration_losses, granularity=granularity, norm_dict=norm_dict)

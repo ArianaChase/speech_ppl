@@ -7,7 +7,7 @@ source $root_dir/venv/gslm-hopper/venv/gslm-hopper/bin/activate
 
 pretrained_model_dir=$root_dir/work/pretrained_models
 gslm_dir=$root_dir/textlesslib/examples/gslm
-gslm_output_dir=$root_dir/work/outputs/gslm
+gslm_output_dir=$root_dir/work/outputs/gslm/test_A/test
 name="GSLM_scoring"
 
 mkdir -p $gslm_output_dir

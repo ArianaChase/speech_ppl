@@ -19,7 +19,40 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+from scipy.stats import binomtest
 
+from scipy.stats import binomtest
+import math
+
+def mcnemar_net(df, learner_col, reference_col):
+    '''
+    Pairs each utterance's learner-audio outcome with its reference-audio (control)
+    outcome, then returns the net audio effect with a 95% CI and McNemar p-value.
+    '''
+    A = df[learner_col] > 0      # preferred on learner audio
+    B = df[reference_col] > 0    # preferred on reference audio (text-only)
+
+    a = int((A & B).sum())
+    b = int((A & ~B).sum())      # audio added a win
+    c = int((~A & B).sum())      # audio removed a win
+    d = int((~A & ~B).sum())
+    n = len(df)
+
+    net = (b - c) / n
+    se = math.sqrt((b + c) - (b - c) ** 2 / n) / n
+
+    if b + c > 0:
+        p = binomtest(b, b + c, 0.5, alternative='two-sided').pvalue
+    else:
+        p = 1.0
+
+    return {
+        'a': a, 'b': b, 'c': c, 'd': d, 'n': n,
+        'net': net * 100,
+        'ci_low': (net - 1.96 * se) * 100,
+        'ci_high': (net + 1.96 * se) * 100,
+        'p': p
+    }
 
 # utils
 def is_overlapping(a_start, a_end, b_start, b_end):
@@ -63,7 +96,6 @@ def align_and_pool(losses, alignments_dict, whole_utterance=False):
             # no windowing -- every token in the file, so both text hypotheses see the same region
             cur_losses = [loss_item['ppl_loss'] for loss_item in tokens]
             target_loss = np.sum(cur_losses)
-
         else:
             a_start = current_alignment["start"] # type: ignore
             a_end = current_alignment["end"]     # type: ignore
@@ -146,26 +178,32 @@ def parse_delta(data):
         df['real_foil_delta'] = df['real_foil'] - df['real_real'] # if final > initial (positive) = correct
         df['real_canonical_delta'] = df['real_ref'] - df['real_real']
         df['ref_foil_delta'] = df['ref_foil'] - df['ref_ref'] # if final > initial (positive) = correct
-        df['ref_actual_delta'] = df['ref_real'] - df['ref_ref'] # if final > initial (positive) = correct
+        df['ref_actual_delta'] = df['ref_real'] - df['ref_ref'] # if final > initial (positive) = ref preferred
 
         # text-prior control: actual vs foil on error-free audio, where the learner's error is absent
         # so any preference here comes from the text being more plausible, not from the acoustics
         df['text_prior_delta'] = df['ref_foil'] - df['ref_real'] # if final > initial (positive) = actual text preferred
-
+        df['canon_prior_delta'] = df['ref_ref'] - df['ref_real'] # positive = actual preferred
+        df['corrected_delta'] = df['real_foil_delta'] - df['text_prior_delta']
         real_foil_percent = (df["real_foil_delta"] > 0).mean() * 100
         real_canon_percent = (df["real_canonical_delta"] > 0).mean() * 100
         ref_foil_percent = (df["ref_foil_delta"] > 0).mean() * 100
         ref_actual_percent = (df["ref_actual_delta"] > 0).mean() * 100
         text_prior_percent = (df["text_prior_delta"] > 0).mean() * 100
+        canon_prior_percent = (df["canon_prior_delta"] > 0).mean() * 100
+        corrected_percent = (df["corrected_delta"] > 0).mean() * 100
         size = len(df)
 
         return {
             'realxfoil': real_foil_percent, 
             'realxcanon' : real_canon_percent, 
             'refxfoil': ref_foil_percent,
-            'refxactual' : ref_actual_percent,
+            'refxactual' : ref_actual_percent, # percentage that canon won over actual
+            'canonprior' : canon_prior_percent, # percentage that actual won over canon
             'textprior' : text_prior_percent,
-            'size' : size
+            'corrected' : corrected_percent,
+            'size' : size,
+            'df': df          # <-- add this
         }
     else:
         df['clean_delta'] = df['clean_sub'] - df['clean_clean'] # final: sub, initial: clean -> if final > initial (positive) = correct
@@ -257,7 +295,11 @@ def print_results(results, model_type, model_name):
         print("\nCONTROL")
         print(f"{'actual beats foil, on error-free audio (text prior)':<52} {results['textprior']:>6.2f}%")
         print(f"{'  -> gap between 2AFC and text prior':<52} {results['realxfoil'] - results['textprior']:>6.2f} pts")
+        print(f"{'actual beats canonical, on error-free audio (text prior)':<52} {results['canonprior']:>6.2f}%")
+        print(f"{'  -> gap between 2AFC and text prior':<52} {results['realxcanon'] - results['canonprior']:>6.2f} pts")     
 
+        print("\nREFERENCE-CORRECTED 2AFC")
+        print(f"{'margin larger on learner audio':<52} {results['corrected']:>6.2f}%")
     else:
         print("MAIN")
         print(f"{'clean text beats sub text, on clean audio':<52} {results['clean_percent']:>6.2f}%")
@@ -344,8 +386,10 @@ if __name__ == "__main__":
         for audio_version in ['real', 'ref']:
             for text_version in ['real', 'foil', 'ref']:
                 alignments = parse_alignments(metadata_df, audio_version, text_version)
-                csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{text_version}_{args.set_name}_per_token_losses.csv"
+                csv_path = f"{CSV_DIR}/{MODEL_TYPE}_{MODEL_NAME}_{audio_version}_{text_version}_{args.set_name}_per_token_losses_257.csv"
                 losses_df = pd.read_csv(csv_path, dtype={'token_id': str, 'filename': str, 'speaker': str})
+                mean_tokens = losses_df.groupby('filename').size().mean()
+                print(f"{audio_version}_{text_version}: mean {mean_tokens:.1f} tokens/file")
 
                 target_word_data = align_and_pool( # num of losses will equal num of alignments
                     losses=losses_df, 
@@ -357,11 +401,18 @@ if __name__ == "__main__":
 
         final_data = parse_final_data(data_store, metadata_df)
         results = parse_delta(final_data)
+        mc_foil  = mcnemar_net(results['df'], 'real_foil_delta', 'text_prior_delta')
+        mc_canon = mcnemar_net(results['df'], 'real_canonical_delta', 'canon_prior_delta')
+
+        for name, mc in [('actual vs foil', mc_foil), ('actual vs canonical', mc_canon)]:
+            print(f"\n{name}")
+            print(f"  2x2  a={mc['a']}  b={mc['b']}  c={mc['c']}  d={mc['d']}  n={mc['n']}")
+            print(f"  net  {mc['net']:.2f} [{mc['ci_low']:.2f}, {mc['ci_high']:.2f}]  p = {mc['p']:.4f}")
 
         print_results(results, MODEL_TYPE, MODEL_NAME)
 
         # record results
-        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['realxfoil'], results['realxcanon'], results['refxfoil'], results['refxactual'], results['textprior'], results['size'], "B"], SERVICE_ACCOUNT)
+        append_to_sheet([MODEL_TYPE, MODEL_NAME, results['realxfoil'], results['realxcanon'], results['refxfoil'], results['refxactual'], results['textprior'], results['corrected'], results['size'], "B"], SERVICE_ACCOUNT)
 
 
     else:
